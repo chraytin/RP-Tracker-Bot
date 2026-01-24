@@ -20,7 +20,7 @@ GP_PER_HOUR = int(os.getenv("GP_PER_HOUR", "25"))
 
 DB_FILE = "rp_tracker.db"
 
-print("Booting RP Tracker…", flush=True)
+print("Booting RP Tracker...", flush=True)
 
 # =========================
 # DATABASE
@@ -53,30 +53,39 @@ def db():
 # =========================
 intents = discord.Intents.default()
 intents.guilds = True
-# Keep this OFF unless you enable it in Dev Portal
+# Leave this OFF unless you enabled it in Discord Dev Portal.
 # intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # =========================
-# KEEPALIVE WEB SERVER (for Railway)
+# KEEPALIVE WEB SERVER (Railway likes apps that listen on PORT)
 # =========================
 async def handle_root(request: web.Request) -> web.Response:
     return web.Response(text="RP Tracker is running.")
 
+async def handle_health(request: web.Request) -> web.Response:
+    return web.Response(text="ok")
+
 async def start_web_server():
-    """
-    Keeps Railway happy by listening on $PORT.
-    """
     port = int(os.getenv("PORT", "8080"))
     app = web.Application()
     app.router.add_get("/", handle_root)
+    app.router.add_get("/health", handle_health)
 
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
     print(f"Web server listening on 0.0.0.0:{port}", flush=True)
+
+# =========================
+# HEARTBEAT (proves process stays alive)
+# =========================
+async def heartbeat():
+    while True:
+        print("Heartbeat: still running", flush=True)
+        await asyncio.sleep(30)
 
 # =========================
 # MODAL
@@ -238,7 +247,7 @@ async def post_tracker(interaction: discord.Interaction):
     await msg.edit(view=view)
 
 # =========================
-# ERROR HANDLERS
+# ERROR HANDLERS (so “nothing happens” becomes a visible error)
 # =========================
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: Exception):
@@ -257,7 +266,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: Exceptio
 # =========================
 @bot.event
 async def on_ready():
-    # Re-register persistent views
+    # Re-register persistent views so buttons keep working after restarts
     conn = db()
     for (msg_id,) in conn.execute("SELECT message_id FROM sessions"):
         bot.add_view(RPView(int(msg_id)))
@@ -273,12 +282,11 @@ async def on_ready():
     print(f"Logged in as {bot.user} (guilds={len(bot.guilds)})", flush=True)
 
 # =========================
-# MAIN ENTRY
+# MAIN
 # =========================
 async def main():
-    # Start the web server first (keeps Railway from stopping container)
     await start_web_server()
-    # Then start the Discord bot (blocks until stopped)
+    asyncio.create_task(heartbeat())
     await bot.start(TOKEN)
 
 if __name__ == "__main__":
