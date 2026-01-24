@@ -1,19 +1,26 @@
+import os
+import time
+import sqlite3
+import traceback
+
 import discord
 from discord.ext import commands
-from discord import app_commands
-import sqlite3
-import time
-import os
 
 # =========================
 # CONFIG
 # =========================
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-XP_PER_HOUR = 100
-GP_PER_HOUR = 25
+XP_PER_HOUR = int(os.getenv("XP_PER_HOUR", "100"))
+GP_PER_HOUR = int(os.getenv("GP_PER_HOUR", "25"))
 
 DB_FILE = "rp_tracker.db"
+
+# Force immediate logs on Railway
+print("Booting RP Tracker…", flush=True)
+
+if not TOKEN:
+    raise RuntimeError("DISCORD_TOKEN is not set. Add it in Railway → Variables.")
 
 # =========================
 # DATABASE
@@ -46,7 +53,8 @@ def db():
 # =========================
 intents = discord.Intents.default()
 intents.guilds = True
-intents.members = True
+# DO NOT enable members intent unless you also enable it in Dev Portal.
+# intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -54,17 +62,26 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # MODAL
 # =========================
 class JoinModal(discord.ui.Modal, title="Join RP"):
-    name = discord.ui.TextInput(label="Character Name")
-    level = discord.ui.TextInput(label="Level")
+    name = discord.ui.TextInput(label="Character Name", max_length=64)
+    level = discord.ui.TextInput(label="Level (1-30)", max_length=3)
 
-    def __init__(self, message_id):
+    def __init__(self, message_id: int):
         super().__init__()
         self.message_id = message_id
 
     async def on_submit(self, interaction: discord.Interaction):
+        try:
+            lvl = int(str(self.level.value).strip())
+            if lvl < 1 or lvl > 30:
+                raise ValueError
+        except ValueError:
+            return await interaction.response.send_message(
+                "Level must be a number between 1 and 30.",
+                ephemeral=True,
+            )
+
         conn = db()
         cur = conn.cursor()
-
         cur.execute("""
             INSERT OR REPLACE INTO participants
             (message_id, user_id, character, level, seconds, last_tick)
@@ -74,17 +91,16 @@ class JoinModal(discord.ui.Modal, title="Join RP"):
         """, (
             self.message_id,
             interaction.user.id,
-            self.name.value,
-            int(self.level.value),
+            str(self.name.value).strip(),
+            lvl,
             self.message_id,
             interaction.user.id
         ))
-
         conn.commit()
         conn.close()
 
         await interaction.response.send_message(
-            f"✅ Joined as **{self.name.value}** (Level {self.level.value})",
+            f"✅ Joined as **{self.name.value}** (Level {lvl})",
             ephemeral=True
         )
 
@@ -92,7 +108,7 @@ class JoinModal(discord.ui.Modal, title="Join RP"):
 # VIEW
 # =========================
 class RPView(discord.ui.View):
-    def __init__(self, message_id):
+    def __init__(self, message_id: int):
         super().__init__(timeout=None)
         self.message_id = message_id
 
@@ -113,12 +129,12 @@ class RPView(discord.ui.View):
         """, (self.message_id,))
 
         for uid, last, secs in cur.fetchall():
-            delta = now - last
+            delta = max(0.0, now - float(last))
             cur.execute("""
                 UPDATE participants
                 SET seconds=?, last_tick=?
                 WHERE message_id=? AND user_id=?
-            """, (secs + delta, now, self.message_id, uid))
+            """, (float(secs) + delta, now, self.message_id, uid))
 
         conn.commit()
         conn.close()
@@ -137,10 +153,10 @@ class RPView(discord.ui.View):
         cur = conn.cursor()
         now = time.time()
 
+        cur.execute("INSERT OR IGNORE INTO sessions VALUES (?, 0, NULL)", (self.message_id,))
         cur.execute("""
-            INSERT OR REPLACE INTO sessions (message_id, active, started_at)
-            VALUES (?, 1, ?)
-        """, (self.message_id, now))
+            UPDATE sessions SET active=1, started_at=? WHERE message_id=?
+        """, (now, self.message_id))
 
         cur.execute("""
             UPDATE participants SET last_tick=?
@@ -163,7 +179,11 @@ class RPView(discord.ui.View):
         conn = db()
         cur = conn.cursor()
 
-        cur.execute("UPDATE sessions SET active=0 WHERE message_id=?", (self.message_id,))
+        cur.execute("UPDATE sessions SET active=0, started_at=NULL WHERE message_id=?", (self.message_id,))
+        cur.execute("""
+            UPDATE participants SET last_tick=NULL WHERE message_id=?
+        """, (self.message_id,))
+
         cur.execute("""
             SELECT user_id, character, level, seconds
             FROM participants WHERE message_id=?
@@ -171,38 +191,27 @@ class RPView(discord.ui.View):
 
         lines = []
         for uid, char, lvl, secs in cur.fetchall():
-            hours = secs / 3600
+            hours = float(secs) / 3600.0
             xp = XP_PER_HOUR * hours
             gp = GP_PER_HOUR * hours
-            lines.append(
-                f"<@{uid}> — **{char}** (Lv {lvl}) → "
-                f"{xp:.1f} XP | {gp:.1f} GP"
-            )
+            lines.append(f"<@{uid}> — **{char}** (Lv {lvl}) → {xp:.1f} XP | {gp:.1f} GP")
 
         conn.commit()
         conn.close()
 
-        await interaction.response.send_message(
-            "**🏁 RP Session Ended**\n" + "\n".join(lines)
-        )
+        await interaction.response.send_message("**🏁 RP Session Ended**\n" + ("\n".join(lines) if lines else "(no participants)"))
 
 # =========================
-# COMMAND
+# SLASH COMMAND
 # =========================
-@bot.tree.command(name="post_rp_tracker")
+@bot.tree.command(name="post_rp_tracker", description="Post an RP tracker with Join/Start/End buttons.")
 async def post_tracker(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="🎭 RP Tracker",
-        description="Join the RP session below."
-    )
+    embed = discord.Embed(title="🎭 RP Tracker", description="Join the RP session below.")
     await interaction.response.send_message(embed=embed)
     msg = await interaction.original_response()
 
     conn = db()
-    conn.execute(
-        "INSERT OR IGNORE INTO sessions VALUES (?, 0, NULL)",
-        (msg.id,)
-    )
+    conn.execute("INSERT OR IGNORE INTO sessions VALUES (?, 0, NULL)", (msg.id,))
     conn.commit()
     conn.close()
 
@@ -211,19 +220,48 @@ async def post_tracker(interaction: discord.Interaction):
     await msg.edit(view=view)
 
 # =========================
+# ERROR HANDLERS (so it doesn’t “do nothing”)
+# =========================
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: Exception):
+    print("Slash command error:", repr(error), flush=True)
+    traceback.print_exc()
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(f"❌ Error: `{type(error).__name__}`", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"❌ Error: `{type(error).__name__}`", ephemeral=True)
+    except Exception:
+        pass
+
+@bot.event
+async def on_error(event, *args, **kwargs):
+    print(f"Event error in {event}", flush=True)
+    traceback.print_exc()
+
+# =========================
 # READY
 # =========================
 @bot.event
 async def on_ready():
+    # Re-register persistent views
     conn = db()
     for (msg_id,) in conn.execute("SELECT message_id FROM sessions"):
-        bot.add_view(RPView(msg_id))
+        bot.add_view(RPView(int(msg_id)))
     conn.close()
 
-    await bot.tree.sync()
-    print(f"Logged in as {bot.user}")
+    # Sync commands
+    try:
+        await bot.tree.sync()
+        print("Slash commands synced.", flush=True)
+    except Exception as e:
+        print("Command sync failed:", repr(e), flush=True)
+        traceback.print_exc()
+
+    print(f"Logged in as {bot.user} (guilds={len(bot.guilds)})", flush=True)
 
 # =========================
 # RUN
 # =========================
+print("Starting bot.run()…", flush=True)
 bot.run(TOKEN)
