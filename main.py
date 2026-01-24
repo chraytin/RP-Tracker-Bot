@@ -2,25 +2,25 @@ import os
 import time
 import sqlite3
 import traceback
+import asyncio
 
 import discord
 from discord.ext import commands
+from aiohttp import web
 
 # =========================
 # CONFIG
 # =========================
 TOKEN = os.getenv("DISCORD_TOKEN")
+if not TOKEN:
+    raise RuntimeError("DISCORD_TOKEN is not set. Add it in Railway → Variables.")
 
 XP_PER_HOUR = int(os.getenv("XP_PER_HOUR", "100"))
 GP_PER_HOUR = int(os.getenv("GP_PER_HOUR", "25"))
 
 DB_FILE = "rp_tracker.db"
 
-# Force immediate logs on Railway
 print("Booting RP Tracker…", flush=True)
-
-if not TOKEN:
-    raise RuntimeError("DISCORD_TOKEN is not set. Add it in Railway → Variables.")
 
 # =========================
 # DATABASE
@@ -53,10 +53,30 @@ def db():
 # =========================
 intents = discord.Intents.default()
 intents.guilds = True
-# DO NOT enable members intent unless you also enable it in Dev Portal.
+# Keep this OFF unless you enable it in Dev Portal
 # intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+# =========================
+# KEEPALIVE WEB SERVER (for Railway)
+# =========================
+async def handle_root(request: web.Request) -> web.Response:
+    return web.Response(text="RP Tracker is running.")
+
+async def start_web_server():
+    """
+    Keeps Railway happy by listening on $PORT.
+    """
+    port = int(os.getenv("PORT", "8080"))
+    app = web.Application()
+    app.router.add_get("/", handle_root)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"Web server listening on 0.0.0.0:{port}", flush=True)
 
 # =========================
 # MODAL
@@ -80,6 +100,10 @@ class JoinModal(discord.ui.Modal, title="Join RP"):
                 ephemeral=True,
             )
 
+        cname = str(self.name.value).strip()
+        if not cname:
+            return await interaction.response.send_message("Name can’t be empty.", ephemeral=True)
+
         conn = db()
         cur = conn.cursor()
         cur.execute("""
@@ -91,7 +115,7 @@ class JoinModal(discord.ui.Modal, title="Join RP"):
         """, (
             self.message_id,
             interaction.user.id,
-            str(self.name.value).strip(),
+            cname,
             lvl,
             self.message_id,
             interaction.user.id
@@ -100,7 +124,7 @@ class JoinModal(discord.ui.Modal, title="Join RP"):
         conn.close()
 
         await interaction.response.send_message(
-            f"✅ Joined as **{self.name.value}** (Level {lvl})",
+            f"✅ Joined as **{cname}** (Level {lvl})",
             ephemeral=True
         )
 
@@ -154,14 +178,8 @@ class RPView(discord.ui.View):
         now = time.time()
 
         cur.execute("INSERT OR IGNORE INTO sessions VALUES (?, 0, NULL)", (self.message_id,))
-        cur.execute("""
-            UPDATE sessions SET active=1, started_at=? WHERE message_id=?
-        """, (now, self.message_id))
-
-        cur.execute("""
-            UPDATE participants SET last_tick=?
-            WHERE message_id=?
-        """, (now, self.message_id))
+        cur.execute("UPDATE sessions SET active=1, started_at=? WHERE message_id=?", (now, self.message_id))
+        cur.execute("UPDATE participants SET last_tick=? WHERE message_id=?", (now, self.message_id))
 
         conn.commit()
         conn.close()
@@ -180,9 +198,7 @@ class RPView(discord.ui.View):
         cur = conn.cursor()
 
         cur.execute("UPDATE sessions SET active=0, started_at=NULL WHERE message_id=?", (self.message_id,))
-        cur.execute("""
-            UPDATE participants SET last_tick=NULL WHERE message_id=?
-        """, (self.message_id,))
+        cur.execute("UPDATE participants SET last_tick=NULL WHERE message_id=?", (self.message_id,))
 
         cur.execute("""
             SELECT user_id, character, level, seconds
@@ -199,7 +215,9 @@ class RPView(discord.ui.View):
         conn.commit()
         conn.close()
 
-        await interaction.response.send_message("**🏁 RP Session Ended**\n" + ("\n".join(lines) if lines else "(no participants)"))
+        await interaction.response.send_message(
+            "**🏁 RP Session Ended**\n" + ("\n".join(lines) if lines else "(no participants)")
+        )
 
 # =========================
 # SLASH COMMAND
@@ -220,7 +238,7 @@ async def post_tracker(interaction: discord.Interaction):
     await msg.edit(view=view)
 
 # =========================
-# ERROR HANDLERS (so it doesn’t “do nothing”)
+# ERROR HANDLERS
 # =========================
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: Exception):
@@ -234,11 +252,6 @@ async def on_app_command_error(interaction: discord.Interaction, error: Exceptio
     except Exception:
         pass
 
-@bot.event
-async def on_error(event, *args, **kwargs):
-    print(f"Event error in {event}", flush=True)
-    traceback.print_exc()
-
 # =========================
 # READY
 # =========================
@@ -250,7 +263,6 @@ async def on_ready():
         bot.add_view(RPView(int(msg_id)))
     conn.close()
 
-    # Sync commands
     try:
         await bot.tree.sync()
         print("Slash commands synced.", flush=True)
@@ -261,7 +273,13 @@ async def on_ready():
     print(f"Logged in as {bot.user} (guilds={len(bot.guilds)})", flush=True)
 
 # =========================
-# RUN
+# MAIN ENTRY
 # =========================
-print("Starting bot.run()…", flush=True)
-bot.run(TOKEN)
+async def main():
+    # Start the web server first (keeps Railway from stopping container)
+    await start_web_server()
+    # Then start the Discord bot (blocks until stopped)
+    await bot.start(TOKEN)
+
+if __name__ == "__main__":
+    asyncio.run(main())
