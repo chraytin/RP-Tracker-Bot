@@ -47,7 +47,7 @@ def ensure_schema():
     # participants:
     # seconds: total accrued time for this participant in this session
     # last_tick: if not NULL, they are currently accruing time (personal timer running)
-    # capped: 0/1 (if 1, earn 🍪 per hour instead of XP; GP still applies)
+    # capped: 0/1 (if 1, earn 🗝️ per hour instead of XP; GP still applies)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS participants (
             message_id INTEGER,
@@ -119,6 +119,42 @@ def xp_per_hour_for_level(level: int) -> int:
 
 def gp_per_hour_for_level(level: int) -> int:
     return max(0, int(level)) * 10
+
+# =========================
+# THEME (Adventurer's Guild vibe)
+# =========================
+def theme_color() -> discord.Color:
+    # Default: warm "guild ledger" gold
+    raw = os.getenv("THEME_COLOR", "#C9A227").lstrip("#")
+    try:
+        return discord.Color(int(raw, 16))
+    except Exception:
+        return discord.Color.gold()
+
+def apply_theme(embed: discord.Embed) -> discord.Embed:
+    embed.color = theme_color()
+
+    # Optional theme art
+    thumb = os.getenv("THEME_THUMBNAIL_URL")  # e.g., guild crest
+    if thumb:
+        embed.set_thumbnail(url=thumb)
+
+    banner = os.getenv("THEME_BANNER_URL")  # e.g., parchment/banner strip
+    if banner:
+        embed.set_image(url=banner)
+
+    # Author + footer defaults
+    guild_name = os.getenv("THEME_NAME", "Adventurer’s Guild Ledger")
+    embed.set_author(name=guild_name)
+
+    footer_text = os.getenv("THEME_FOOTER_TEXT", "Stamped & filed by the Guild Registrar • Session rewards awarded on 45-minute marks")
+    footer_icon = os.getenv("THEME_FOOTER_ICON_URL")
+    if footer_icon:
+        embed.set_footer(text=footer_text, icon_url=footer_icon)
+    else:
+        embed.set_footer(text=footer_text)
+
+    return embed
 
 # =========================
 # BOT SETUP
@@ -193,23 +229,35 @@ def fmt_hm(seconds: float) -> str:
     m = int((seconds % 3600) // 60)
     return f"{h}h {m}m"
 
+def state_label(state: int) -> str:
+    if state == 1:
+        return "🟢 Active"
+    if state == 2:
+        return "🟡 Paused"
+    return "⚪ Not Started"
+
 def build_embed(message_id: int) -> discord.Embed:
+    state, _, _, _ = get_session(message_id)
     elapsed = session_elapsed_seconds(message_id)
     parts = list_participants(message_id)
 
     embed = discord.Embed(
-        title=f"RP Session - Time: {fmt_hm(elapsed)}",
-        description="Players Joined:"
+        title="📜 Adventurer’s Guild — RP Session Log",
+        description="A registrar’s record of attendance and session time."
     )
 
-    if parts:
-        # Keep it clean like your screenshot (no extra info)
-        lines = [f"<@{uid}> - {char} (lvl {lvl})" for uid, char, lvl, _, _cap in parts]
-        embed.add_field(name="\u200b", value="\n".join(lines)[:1024], inline=False)
-    else:
-        embed.add_field(name="\u200b", value="(none yet)", inline=False)
+    embed.add_field(name="Status", value=state_label(state), inline=True)
+    embed.add_field(name="Session Time", value=f"⏳ **{fmt_hm(elapsed)}**", inline=True)
 
-    return embed
+    if parts:
+        roster_lines = [f"<@{uid}> — **{char}** (lvl {lvl})" for uid, char, lvl, _secs, _cap in parts]
+        roster = "\n".join(roster_lines)
+    else:
+        roster = "*No adventurers signed in yet.*"
+
+    embed.add_field(name="Roster", value=roster[:1024], inline=False)
+
+    return apply_theme(embed)
 
 async def update_tracker_message(message_id: int):
     _, _, _, channel_id = get_session(message_id)
@@ -290,7 +338,7 @@ async def ticker_loop():
 # =========================
 # JOIN MODAL
 # =========================
-class JoinModal(discord.ui.Modal, title="Join RP"):
+class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
     name = discord.ui.TextInput(label="Character Name", max_length=64)
     level = discord.ui.TextInput(label="Level (1-20)", max_length=3)
     capped = discord.ui.TextInput(
@@ -354,167 +402,75 @@ class JoinModal(discord.ui.Modal, title="Join RP"):
         conn.commit()
         conn.close()
 
-        cap_txt = " (Capped)" if is_capped else ""
+        cap_txt = " (Capped: 🗝️/hr)" if is_capped else ""
         await interaction.response.send_message(
-            f"✅ Joined as **{cname}** (lvl {lvl}){cap_txt}",
+            f"✅ Signed in: **{cname}** (lvl {lvl}){cap_txt}",
             ephemeral=True
         )
 
         await update_tracker_message(self.message_id)
 
 # =========================
-# VIEW (buttons + Leave/Rejoin)
+# VIEW (buttons: labels + rows)
 # =========================
 class RPView(discord.ui.View):
     def __init__(self, message_id: int):
         super().__init__(timeout=None)
         self.message_id = message_id
 
-        # Row 0
+        # Row 0: player actions
         self.join_btn = discord.ui.Button(
-            label="Join RP", style=discord.ButtonStyle.success,
-            custom_id=f"rp_join:{message_id}"
+            label="✅ Join", style=discord.ButtonStyle.success,
+            custom_id=f"rp_join:{message_id}", row=0
         )
-        self.start_btn = discord.ui.Button(
-            label="Start RP", style=discord.ButtonStyle.primary,
-            custom_id=f"rp_start:{message_id}"
-        )
-        self.pause_btn = discord.ui.Button(
-            label="Pause RP", style=discord.ButtonStyle.secondary,
-            custom_id=f"rp_pause:{message_id}"
-        )
-
-        # Row 1
-        self.continue_btn = discord.ui.Button(
-            label="Continue RP", style=discord.ButtonStyle.success,
-            custom_id=f"rp_continue:{message_id}"
-        )
-        self.end_btn = discord.ui.Button(
-            label="End RP", style=discord.ButtonStyle.danger,
-            custom_id=f"rp_end:{message_id}"
-        )
-
-        # Row 2 (per-player controls)
         self.leave_btn = discord.ui.Button(
-            label="Leave RP", style=discord.ButtonStyle.secondary,
-            custom_id=f"rp_leave:{message_id}"
+            label="⏹ Leave", style=discord.ButtonStyle.secondary,
+            custom_id=f"rp_leave:{message_id}", row=0
         )
         self.rejoin_btn = discord.ui.Button(
-            label="Rejoin RP", style=discord.ButtonStyle.secondary,
-            custom_id=f"rp_rejoin:{message_id}"
+            label="🔁 Rejoin", style=discord.ButtonStyle.secondary,
+            custom_id=f"rp_rejoin:{message_id}", row=0
+        )
+
+        # Row 1: DM actions
+        self.start_btn = discord.ui.Button(
+            label="▶️ Start", style=discord.ButtonStyle.primary,
+            custom_id=f"rp_start:{message_id}", row=1
+        )
+        self.pause_btn = discord.ui.Button(
+            label="⏸ Pause", style=discord.ButtonStyle.secondary,
+            custom_id=f"rp_pause:{message_id}", row=1
+        )
+        self.resume_btn = discord.ui.Button(
+            label="⏵ Resume", style=discord.ButtonStyle.success,
+            custom_id=f"rp_resume:{message_id}", row=1
+        )
+
+        # Row 2: DM only
+        self.end_btn = discord.ui.Button(
+            label="🏁 End", style=discord.ButtonStyle.danger,
+            custom_id=f"rp_end:{message_id}", row=2
         )
 
         self.join_btn.callback = self.join_cb
-        self.start_btn.callback = self.start_cb
-        self.pause_btn.callback = self.pause_cb
-        self.continue_btn.callback = self.continue_cb
-        self.end_btn.callback = self.end_cb
         self.leave_btn.callback = self.leave_cb
         self.rejoin_btn.callback = self.rejoin_cb
+        self.start_btn.callback = self.start_cb
+        self.pause_btn.callback = self.pause_cb
+        self.resume_btn.callback = self.resume_cb
+        self.end_btn.callback = self.end_cb
 
         self.add_item(self.join_btn)
-        self.add_item(self.start_btn)
-        self.add_item(self.pause_btn)
-
-        self.continue_btn.row = 1
-        self.end_btn.row = 1
-        self.add_item(self.continue_btn)
-        self.add_item(self.end_btn)
-
-        self.leave_btn.row = 2
-        self.rejoin_btn.row = 2
         self.add_item(self.leave_btn)
         self.add_item(self.rejoin_btn)
+        self.add_item(self.start_btn)
+        self.add_item(self.pause_btn)
+        self.add_item(self.resume_btn)
+        self.add_item(self.end_btn)
 
+    # -------- Player buttons --------
     async def join_cb(self, interaction: discord.Interaction):
         await interaction.response.send_modal(JoinModal(self.message_id))
-
-    async def start_cb(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("Admin only.", ephemeral=True)
-            return
-
-        state, _, run_seconds, _ = get_session(self.message_id)
-        if state == 1:
-            await interaction.response.send_message("Already running.", ephemeral=True)
-            return
-
-        now = time.time()
-        conn = db()
-        cur = conn.cursor()
-
-        cur.execute(
-            "INSERT OR IGNORE INTO sessions (message_id, state, started_at, run_seconds, channel_id) VALUES (?, 0, NULL, 0, ?)",
-            (self.message_id, interaction.channel_id)
-        )
-
-        cur.execute(
-            "UPDATE sessions SET state=1, started_at=?, channel_id=?, run_seconds=? WHERE message_id=?",
-            (now, interaction.channel_id, float(run_seconds or 0.0), self.message_id)
-        )
-
-        # Everyone currently participating begins accruing time
-        cur.execute("UPDATE participants SET last_tick=? WHERE message_id=?", (now, self.message_id))
-
-        conn.commit()
-        conn.close()
-
-        await interaction.response.send_message("▶️ RP Started", ephemeral=True)
-        await update_tracker_message(self.message_id)
-
-    async def pause_cb(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("Admin only.", ephemeral=True)
-            return
-
-        state, started_at, run_seconds, _ = get_session(self.message_id)
-        if state != 1 or started_at is None:
-            await interaction.response.send_message("Not currently running.", ephemeral=True)
-            return
-
-        tick_running_sessions()
-
-        now = time.time()
-        add = max(0.0, now - started_at)
-        new_run = float(run_seconds or 0.0) + add
-
-        conn = db()
-        cur = conn.cursor()
-        cur.execute("UPDATE sessions SET state=2, started_at=NULL, run_seconds=? WHERE message_id=?", (new_run, self.message_id))
-        # Stop everyone (session pause)
-        cur.execute("UPDATE participants SET last_tick=NULL WHERE message_id=?", (self.message_id,))
-        conn.commit()
-        conn.close()
-
-        await interaction.response.send_message("⏸️ RP Paused", ephemeral=True)
-        await update_tracker_message(self.message_id)
-
-    async def continue_cb(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("Admin only.", ephemeral=True)
-            return
-
-        state, _, run_seconds, _ = get_session(self.message_id)
-        if state != 2:
-            await interaction.response.send_message("Not currently paused.", ephemeral=True)
-            return
-
-        now = time.time()
-        conn = db()
-        cur = conn.cursor()
-        cur.execute(
-            "UPDATE sessions SET state=1, started_at=?, run_seconds=? WHERE message_id=?",
-            (now, float(run_seconds or 0.0), self.message_id)
-        )
-
-        # Resume for everyone (players who want to be out can click Leave RP)
-        cur.execute("UPDATE participants SET last_tick=? WHERE message_id=?", (now, self.message_id))
-
-        conn.commit()
-        conn.close()
-
-        await interaction.response.send_message("▶️ RP Continued", ephemeral=True)
-        await update_tracker_message(self.message_id)
 
     async def leave_cb(self, interaction: discord.Interaction):
         """Stop time tracking ONLY for the clicker."""
@@ -548,7 +504,7 @@ class RPView(discord.ui.View):
         conn.commit()
         conn.close()
 
-        await interaction.response.send_message("⏹️ You left RP. Your timer is paused for you only.", ephemeral=True)
+        await interaction.response.send_message("⏹ You’ve been signed out (timer paused for you only).", ephemeral=True)
         await update_tracker_message(self.message_id)
 
     async def rejoin_cb(self, interaction: discord.Interaction):
@@ -563,7 +519,7 @@ class RPView(discord.ui.View):
 
         if not exists:
             conn.close()
-            await interaction.response.send_message("You haven’t joined this RP yet. Click **Join RP** first.", ephemeral=True)
+            await interaction.response.send_message("You haven’t joined yet. Click **✅ Join** first.", ephemeral=True)
             return
 
         if state != 1:
@@ -571,7 +527,7 @@ class RPView(discord.ui.View):
                         (self.message_id, interaction.user.id))
             conn.commit()
             conn.close()
-            await interaction.response.send_message("You rejoined, but RP isn’t running yet.", ephemeral=True)
+            await interaction.response.send_message("You’re marked present, but the session isn’t running.", ephemeral=True)
             await update_tracker_message(self.message_id)
             return
 
@@ -582,12 +538,101 @@ class RPView(discord.ui.View):
         conn.commit()
         conn.close()
 
-        await interaction.response.send_message("▶️ You rejoined RP. Your timer is running again.", ephemeral=True)
+        await interaction.response.send_message("🔁 You’re back in. Your timer is running again.", ephemeral=True)
+        await update_tracker_message(self.message_id)
+
+    # -------- DM buttons --------
+    def _require_dm(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.guild_permissions.manage_guild
+
+    async def start_cb(self, interaction: discord.Interaction):
+        if not self._require_dm(interaction):
+            await interaction.response.send_message("DM/Staff only.", ephemeral=True)
+            return
+
+        state, _, run_seconds, _ = get_session(self.message_id)
+        if state == 1:
+            await interaction.response.send_message("Already running.", ephemeral=True)
+            return
+
+        now = time.time()
+        conn = db()
+        cur = conn.cursor()
+
+        cur.execute(
+            "INSERT OR IGNORE INTO sessions (message_id, state, started_at, run_seconds, channel_id) VALUES (?, 0, NULL, 0, ?)",
+            (self.message_id, interaction.channel_id)
+        )
+
+        cur.execute(
+            "UPDATE sessions SET state=1, started_at=?, channel_id=?, run_seconds=? WHERE message_id=?",
+            (now, interaction.channel_id, float(run_seconds or 0.0), self.message_id)
+        )
+
+        # Start accruing for everyone currently participating
+        cur.execute("UPDATE participants SET last_tick=? WHERE message_id=?", (now, self.message_id))
+
+        conn.commit()
+        conn.close()
+
+        await interaction.response.send_message("▶️ Session started. The guild clock is running.", ephemeral=True)
+        await update_tracker_message(self.message_id)
+
+    async def pause_cb(self, interaction: discord.Interaction):
+        if not self._require_dm(interaction):
+            await interaction.response.send_message("DM/Staff only.", ephemeral=True)
+            return
+
+        state, started_at, run_seconds, _ = get_session(self.message_id)
+        if state != 1 or started_at is None:
+            await interaction.response.send_message("Not currently running.", ephemeral=True)
+            return
+
+        tick_running_sessions()
+
+        now = time.time()
+        add = max(0.0, now - started_at)
+        new_run = float(run_seconds or 0.0) + add
+
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("UPDATE sessions SET state=2, started_at=NULL, run_seconds=? WHERE message_id=?", (new_run, self.message_id))
+        cur.execute("UPDATE participants SET last_tick=NULL WHERE message_id=?", (self.message_id,))
+        conn.commit()
+        conn.close()
+
+        await interaction.response.send_message("⏸ Session paused. Quills down.", ephemeral=True)
+        await update_tracker_message(self.message_id)
+
+    async def resume_cb(self, interaction: discord.Interaction):
+        if not self._require_dm(interaction):
+            await interaction.response.send_message("DM/Staff only.", ephemeral=True)
+            return
+
+        state, _, run_seconds, _ = get_session(self.message_id)
+        if state != 2:
+            await interaction.response.send_message("Not currently paused.", ephemeral=True)
+            return
+
+        now = time.time()
+        conn = db()
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE sessions SET state=1, started_at=?, run_seconds=? WHERE message_id=?",
+            (now, float(run_seconds or 0.0), self.message_id)
+        )
+        # Resume for everyone; individual players can opt out via Leave
+        cur.execute("UPDATE participants SET last_tick=? WHERE message_id=?", (now, self.message_id))
+
+        conn.commit()
+        conn.close()
+
+        await interaction.response.send_message("⏵ Session resumed. The guild clock continues.", ephemeral=True)
         await update_tracker_message(self.message_id)
 
     async def end_cb(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("Admin only.", ephemeral=True)
+        if not self._require_dm(interaction):
+            await interaction.response.send_message("DM/Staff only.", ephemeral=True)
             return
 
         state, started_at, run_seconds, _ = get_session(self.message_id)
@@ -608,7 +653,7 @@ class RPView(discord.ui.View):
         conn.commit()
         conn.close()
 
-        # Rewards summary (XP or 🍪, plus GP always)
+        # Rewards summary (XP or 🗝️, plus GP always)
         parts = list_participants(self.message_id)
         lines = []
         for uid, char, lvl, secs, cap in parts:
@@ -616,25 +661,28 @@ class RPView(discord.ui.View):
             gp = gp_per_hour_for_level(lvl) * awarded
 
             if cap:
-                cookies = awarded  # 1 🍪 per rewarded hour
-                lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) → **{awarded}h**: 🍪 {cookies} | {gp} GP")
+                keys = awarded  # 1 🗝️ per rewarded hour
+                lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) → **{awarded}h**: 🗝️ {keys} | {gp} GP")
             else:
                 xp = xp_per_hour_for_level(lvl) * awarded
                 lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) → **{awarded}h**: {xp} XP | {gp} GP")
 
         await interaction.response.send_message(
-            "**🏁 RP Ended — Rewards**\n" + ("\n".join(lines) if lines else "(no participants)")
+            "🏁 **Guild Ledger Closed — Rewards Issued**\n" + ("\n".join(lines) if lines else "(no participants)")
         )
         await update_tracker_message(self.message_id)
 
 # =========================
 # SLASH COMMAND
 # =========================
-@bot.tree.command(name="post_rp_tracker", description="Post an RP tracker with buttons.")
+@bot.tree.command(name="post_rp_tracker", description="Post an Adventurer’s Guild RP tracker.")
 async def post_tracker(interaction: discord.Interaction):
-    await interaction.response.send_message(embed=discord.Embed(title="RP Tracker", description="Creating…"))
+    # Post initial embed
+    temp = apply_theme(discord.Embed(title="📜 Opening a new Guild Ledger…", description="Preparing the session log."))
+    await interaction.response.send_message(embed=temp)
     msg = await interaction.original_response()
 
+    # Store session
     conn = db()
     cur = conn.cursor()
     cur.execute(
@@ -645,9 +693,22 @@ async def post_tracker(interaction: discord.Interaction):
     conn.commit()
     conn.close()
 
+    # Attach view and themed embed
     view = RPView(msg.id)
     await msg.edit(embed=build_embed(msg.id), view=view)
     bot.add_view(view)
+
+    # Pin the message (requires Manage Messages in that channel/thread)
+    try:
+        await msg.pin(reason="Adventurer’s Guild RP Tracker")
+    except discord.Forbidden:
+        # If missing permissions, don't fail the command
+        await interaction.followup.send(
+            "ℹ️ I couldn’t pin the tracker (missing **Manage Messages** permission here).",
+            ephemeral=True
+        )
+    except discord.HTTPException:
+        pass
 
 # =========================
 # ERROR HANDLER
