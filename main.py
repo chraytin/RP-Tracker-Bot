@@ -53,13 +53,13 @@ def db():
 # =========================
 intents = discord.Intents.default()
 intents.guilds = True
-# Leave this OFF unless you enabled it in Discord Dev Portal.
+# Do NOT enable members intent unless you also enable it in Discord Dev Portal.
 # intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # =========================
-# KEEPALIVE WEB SERVER (Railway likes apps that listen on PORT)
+# KEEPALIVE WEB SERVER (Railway)
 # =========================
 async def handle_root(request: web.Request) -> web.Response:
     return web.Response(text="RP Tracker is running.")
@@ -80,7 +80,7 @@ async def start_web_server():
     print(f"Web server listening on 0.0.0.0:{port}", flush=True)
 
 # =========================
-# HEARTBEAT (proves process stays alive)
+# HEARTBEAT
 # =========================
 async def heartbeat():
     while True:
@@ -172,11 +172,11 @@ class RPView(discord.ui.View):
         conn.commit()
         conn.close()
 
-    @discord.ui.button(label="Join RP", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="Join RP", style=discord.ButtonStyle.success, custom_id="rp_join")
     async def join(self, interaction: discord.Interaction, _):
         await interaction.response.send_modal(JoinModal(self.message_id))
 
-    @discord.ui.button(label="Start RP", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Start RP", style=discord.ButtonStyle.primary, custom_id="rp_start")
     async def start(self, interaction: discord.Interaction, _):
         if not interaction.user.guild_permissions.manage_guild:
             await interaction.response.send_message("Admin only.", ephemeral=True)
@@ -195,7 +195,7 @@ class RPView(discord.ui.View):
 
         await interaction.response.send_message("▶️ RP Started", ephemeral=True)
 
-    @discord.ui.button(label="End RP", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="End RP", style=discord.ButtonStyle.danger, custom_id="rp_end")
     async def end(self, interaction: discord.Interaction, _):
         if not interaction.user.guild_permissions.manage_guild:
             await interaction.response.send_message("Admin only.", ephemeral=True)
@@ -243,21 +243,26 @@ async def post_tracker(interaction: discord.Interaction):
     conn.close()
 
     view = RPView(msg.id)
-    bot.add_view(view)
+    # DO NOT call bot.add_view(view) here; that requires persistence validation.
     await msg.edit(view=view)
 
 # =========================
-# ERROR HANDLERS (so “nothing happens” becomes a visible error)
+# ERROR HANDLER (unwrap underlying errors)
 # =========================
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: Exception):
-    print("Slash command error:", repr(error), flush=True)
-    traceback.print_exc()
+    original = getattr(error, "original", None)
+    shown = original if original else error
+
+    print("Slash command error:", repr(shown), flush=True)
+    traceback.print_exception(type(shown), shown, shown.__traceback__)
+
+    msg = f"❌ Error: `{type(shown).__name__}` — {shown}"
     try:
         if interaction.response.is_done():
-            await interaction.followup.send(f"❌ Error: `{type(error).__name__}`", ephemeral=True)
+            await interaction.followup.send(msg[:1900], ephemeral=True)
         else:
-            await interaction.response.send_message(f"❌ Error: `{type(error).__name__}`", ephemeral=True)
+            await interaction.response.send_message(msg[:1900], ephemeral=True)
     except Exception:
         pass
 
