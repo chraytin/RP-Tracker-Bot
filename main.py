@@ -32,7 +32,7 @@ def ensure_schema():
 
     # sessions:
     # state: 0=stopped, 1=running, 2=paused
-    # started_at: when running began (for current run segment)
+    # started_at: when running began (current segment)
     # run_seconds: accumulated running time across start/pause/continue
     cur.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
@@ -43,6 +43,11 @@ def ensure_schema():
             channel_id INTEGER
         )
     """)
+
+    # participants:
+    # seconds: total accrued time for this participant in this session
+    # last_tick: if not NULL, they are currently accruing time (personal timer running)
+    # capped: 0/1 (if 1, earn 🍪 per hour instead of XP; GP still applies)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS participants (
             message_id INTEGER,
@@ -51,30 +56,38 @@ def ensure_schema():
             level INTEGER,
             seconds REAL,
             last_tick REAL,
+            capped INTEGER,
             PRIMARY KEY (message_id, user_id)
         )
     """)
 
     # Migrations for older DBs
     cur.execute("PRAGMA table_info(sessions)")
-    cols = {row[1] for row in cur.fetchall()}
+    scols = {row[1] for row in cur.fetchall()}
 
-    if "active" in cols and "state" not in cols:
+    if "active" in scols and "state" not in scols:
         cur.execute("ALTER TABLE sessions ADD COLUMN state INTEGER")
         cur.execute("UPDATE sessions SET state = CASE WHEN active=1 THEN 1 ELSE 0 END WHERE state IS NULL")
 
-    if "channel_id" not in cols:
+    if "channel_id" not in scols:
         cur.execute("ALTER TABLE sessions ADD COLUMN channel_id INTEGER")
 
-    if "run_seconds" not in cols:
+    if "run_seconds" not in scols:
         cur.execute("ALTER TABLE sessions ADD COLUMN run_seconds REAL")
         cur.execute("UPDATE sessions SET run_seconds = COALESCE(run_seconds, 0)")
 
-    if "started_at" not in cols:
+    if "started_at" not in scols:
         cur.execute("ALTER TABLE sessions ADD COLUMN started_at REAL")
 
     cur.execute("UPDATE sessions SET state = COALESCE(state, 0)")
     cur.execute("UPDATE sessions SET run_seconds = COALESCE(run_seconds, 0)")
+
+    # Participants migration: add capped if missing
+    cur.execute("PRAGMA table_info(participants)")
+    pcols = {row[1] for row in cur.fetchall()}
+    if "capped" not in pcols:
+        cur.execute("ALTER TABLE participants ADD COLUMN capped INTEGER")
+        cur.execute("UPDATE participants SET capped = COALESCE(capped, 0)")
 
     conn.commit()
     conn.close()
@@ -85,7 +98,10 @@ ensure_schema()
 # REWARD RULES
 # =========================
 def reward_hours(seconds: float) -> int:
-    """0h until 00:45:00, 1h at 00:45, 2h at 01:45, etc."""
+    """
+    Whole-hour rewards with a 45-minute threshold.
+    0h until 00:45:00, 1h at 00:45, 2h at 01:45, etc.
+    """
     return int((max(0.0, seconds) + 900) // 3600)
 
 def xp_per_hour_for_level(level: int) -> int:
@@ -138,7 +154,10 @@ async def start_web_server():
 def get_session(message_id: int) -> Tuple[int, Optional[float], float, Optional[int]]:
     conn = db()
     cur = conn.cursor()
-    cur.execute("SELECT state, started_at, COALESCE(run_seconds,0), channel_id FROM sessions WHERE message_id=?", (message_id,))
+    cur.execute(
+        "SELECT state, started_at, COALESCE(run_seconds,0), channel_id FROM sessions WHERE message_id=?",
+        (message_id,)
+    )
     row = cur.fetchone()
     conn.close()
     if not row:
@@ -149,16 +168,16 @@ def get_session(message_id: int) -> Tuple[int, Optional[float], float, Optional[
     channel_id = int(row[3]) if row[3] is not None else None
     return state, started_at, run_seconds, channel_id
 
-def list_participants(message_id: int) -> List[Tuple[int, str, int, float]]:
+def list_participants(message_id: int) -> List[Tuple[int, str, int, float, int]]:
     conn = db()
     cur = conn.cursor()
     cur.execute("""
-        SELECT user_id, character, level, COALESCE(seconds, 0)
+        SELECT user_id, character, level, COALESCE(seconds, 0), COALESCE(capped, 0)
         FROM participants
         WHERE message_id=?
         ORDER BY user_id
     """, (message_id,))
-    rows = [(int(uid), str(ch), int(lvl), float(secs)) for (uid, ch, lvl, secs) in cur.fetchall()]
+    rows = [(int(uid), str(ch), int(lvl), float(secs), int(cap)) for (uid, ch, lvl, secs, cap) in cur.fetchall()]
     conn.close()
     return rows
 
@@ -184,7 +203,8 @@ def build_embed(message_id: int) -> discord.Embed:
     )
 
     if parts:
-        lines = [f"<@{uid}> - {char} (lvl {lvl})" for uid, char, lvl, _ in parts]
+        # Keep it clean like your screenshot (no extra info)
+        lines = [f"<@{uid}> - {char} (lvl {lvl})" for uid, char, lvl, _, _cap in parts]
         embed.add_field(name="\u200b", value="\n".join(lines)[:1024], inline=False)
     else:
         embed.add_field(name="\u200b", value="(none yet)", inline=False)
@@ -273,6 +293,12 @@ async def ticker_loop():
 class JoinModal(discord.ui.Modal, title="Join RP"):
     name = discord.ui.TextInput(label="Character Name", max_length=64)
     level = discord.ui.TextInput(label="Level (1-20)", max_length=3)
+    capped = discord.ui.TextInput(
+        label="Capped? (yes/no)",
+        required=False,
+        max_length=5,
+        placeholder="no"
+    )
 
     def __init__(self, message_id: int):
         super().__init__()
@@ -293,23 +319,27 @@ class JoinModal(discord.ui.Modal, title="Join RP"):
         if not cname:
             return await interaction.response.send_message("Name can’t be empty.", ephemeral=True)
 
+        cap_raw = (str(self.capped.value).strip().lower() if self.capped.value else "no")
+        is_capped = 1 if cap_raw in ("y", "yes", "true", "1", "cap", "capped") else 0
+
         conn = db()
         cur = conn.cursor()
 
         # Preserve accumulated seconds if editing
         cur.execute("""
             INSERT OR REPLACE INTO participants
-            (message_id, user_id, character, level, seconds, last_tick)
+            (message_id, user_id, character, level, seconds, last_tick, capped)
             VALUES (?, ?, ?, ?, COALESCE(
                 (SELECT seconds FROM participants WHERE message_id=? AND user_id=?), 0
-            ), NULL)
+            ), NULL, ?)
         """, (
             self.message_id,
             interaction.user.id,
             cname,
             lvl,
             self.message_id,
-            interaction.user.id
+            interaction.user.id,
+            is_capped
         ))
 
         # If session is running, auto-start their personal timer now
@@ -324,8 +354,9 @@ class JoinModal(discord.ui.Modal, title="Join RP"):
         conn.commit()
         conn.close()
 
+        cap_txt = " (Capped)" if is_capped else ""
         await interaction.response.send_message(
-            f"✅ Joined as **{cname}** (lvl {lvl})",
+            f"✅ Joined as **{cname}** (lvl {lvl}){cap_txt}",
             ephemeral=True
         )
 
@@ -471,14 +502,12 @@ class RPView(discord.ui.View):
         now = time.time()
         conn = db()
         cur = conn.cursor()
-        cur.execute("UPDATE sessions SET state=1, started_at=?, run_seconds=? WHERE message_id=?",
-                    (now, float(run_seconds or 0.0), self.message_id))
+        cur.execute(
+            "UPDATE sessions SET state=1, started_at=?, run_seconds=? WHERE message_id=?",
+            (now, float(run_seconds or 0.0), self.message_id)
+        )
 
-        # Resume only for players who have NOT "left":
-        # We'll resume timers for everyone who has joined (seconds exists),
-        # but NOT for people who previously clicked Leave RP and are currently last_tick NULL.
-        # However pause sets all last_tick NULL, so we need a separate rule:
-        # We'll resume for everyone, because session is continuing and the player can choose Leave afterward.
+        # Resume for everyone (players who want to be out can click Leave RP)
         cur.execute("UPDATE participants SET last_tick=? WHERE message_id=?", (now, self.message_id))
 
         conn.commit()
@@ -488,11 +517,7 @@ class RPView(discord.ui.View):
         await update_tracker_message(self.message_id)
 
     async def leave_cb(self, interaction: discord.Interaction):
-        """
-        Stops time tracking ONLY for the clicker.
-        Does not remove them from the participants list or erase seconds.
-        """
-        # First, tick once so they get credit up to now if currently accruing
+        """Stop time tracking ONLY for the clicker."""
         now = time.time()
         conn = db()
         cur = conn.cursor()
@@ -510,7 +535,6 @@ class RPView(discord.ui.View):
 
         last_tick, secs = row[0], float(row[1] or 0.0)
 
-        # If they were accruing, add time up to now, then stop (last_tick NULL)
         if last_tick is not None:
             delta = max(0.0, now - float(last_tick))
             secs += delta
@@ -528,16 +552,13 @@ class RPView(discord.ui.View):
         await update_tracker_message(self.message_id)
 
     async def rejoin_cb(self, interaction: discord.Interaction):
-        """
-        Restarts time tracking ONLY for the clicker (if session is running).
-        """
+        """Restart time tracking ONLY for the clicker if session is running."""
         state, _, _, _ = get_session(self.message_id)
 
         conn = db()
         cur = conn.cursor()
-        cur.execute("""
-            SELECT 1 FROM participants WHERE message_id=? AND user_id=?
-        """, (self.message_id, interaction.user.id))
+        cur.execute("SELECT 1 FROM participants WHERE message_id=? AND user_id=?",
+                    (self.message_id, interaction.user.id))
         exists = cur.fetchone() is not None
 
         if not exists:
@@ -546,11 +567,8 @@ class RPView(discord.ui.View):
             return
 
         if state != 1:
-            # Session not running: keep last_tick NULL; they will start accruing when Start/Continue happens
-            cur.execute("""
-                UPDATE participants SET last_tick=NULL
-                WHERE message_id=? AND user_id=?
-            """, (self.message_id, interaction.user.id))
+            cur.execute("UPDATE participants SET last_tick=NULL WHERE message_id=? AND user_id=?",
+                        (self.message_id, interaction.user.id))
             conn.commit()
             conn.close()
             await interaction.response.send_message("You rejoined, but RP isn’t running yet.", ephemeral=True)
@@ -558,10 +576,8 @@ class RPView(discord.ui.View):
             return
 
         now = time.time()
-        cur.execute("""
-            UPDATE participants SET last_tick=?
-            WHERE message_id=? AND user_id=?
-        """, (now, self.message_id, interaction.user.id))
+        cur.execute("UPDATE participants SET last_tick=? WHERE message_id=? AND user_id=?",
+                    (now, self.message_id, interaction.user.id))
 
         conn.commit()
         conn.close()
@@ -584,19 +600,27 @@ class RPView(discord.ui.View):
 
         conn = db()
         cur = conn.cursor()
-        cur.execute("UPDATE sessions SET state=0, started_at=NULL, run_seconds=? WHERE message_id=?",
-                    (float(run_seconds or 0.0), self.message_id))
+        cur.execute(
+            "UPDATE sessions SET state=0, started_at=NULL, run_seconds=? WHERE message_id=?",
+            (float(run_seconds or 0.0), self.message_id)
+        )
         cur.execute("UPDATE participants SET last_tick=NULL WHERE message_id=?", (self.message_id,))
         conn.commit()
         conn.close()
 
+        # Rewards summary (XP or 🍪, plus GP always)
         parts = list_participants(self.message_id)
         lines = []
-        for uid, char, lvl, secs in parts:
+        for uid, char, lvl, secs, cap in parts:
             awarded = reward_hours(secs)
-            xp = xp_per_hour_for_level(lvl) * awarded
             gp = gp_per_hour_for_level(lvl) * awarded
-            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) → **{awarded}h**: {xp} XP | {gp} GP")
+
+            if cap:
+                cookies = awarded  # 1 🍪 per rewarded hour
+                lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) → **{awarded}h**: 🍪 {cookies} | {gp} GP")
+            else:
+                xp = xp_per_hour_for_level(lvl) * awarded
+                lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) → **{awarded}h**: {xp} XP | {gp} GP")
 
         await interaction.response.send_message(
             "**🏁 RP Ended — Rewards**\n" + ("\n".join(lines) if lines else "(no participants)")
