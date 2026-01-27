@@ -124,7 +124,6 @@ def gp_per_hour_for_level(level: int) -> int:
 # THEME (Adventurer's Guild vibe)
 # =========================
 def theme_color() -> discord.Color:
-    # Default: warm "guild ledger" gold
     raw = os.getenv("THEME_COLOR", "#C9A227").lstrip("#")
     try:
         return discord.Color(int(raw, 16))
@@ -134,20 +133,21 @@ def theme_color() -> discord.Color:
 def apply_theme(embed: discord.Embed) -> discord.Embed:
     embed.color = theme_color()
 
-    # Optional theme art
-    thumb = os.getenv("THEME_THUMBNAIL_URL")  # e.g., guild crest
+    thumb = os.getenv("THEME_THUMBNAIL_URL")
     if thumb:
         embed.set_thumbnail(url=thumb)
 
-    banner = os.getenv("THEME_BANNER_URL")  # e.g., parchment/banner strip
+    banner = os.getenv("THEME_BANNER_URL")
     if banner:
         embed.set_image(url=banner)
 
-    # Author + footer defaults
     guild_name = os.getenv("THEME_NAME", "Adventurer’s Guild Ledger")
     embed.set_author(name=guild_name)
 
-    footer_text = os.getenv("THEME_FOOTER_TEXT", "Stamped & filed by the Guild Registrar • Session rewards awarded on 45-minute marks")
+    footer_text = os.getenv(
+        "THEME_FOOTER_TEXT",
+        "Stamped & filed by the Guild Registrar • Session rewards awarded on 45-minute marks"
+    )
     footer_icon = os.getenv("THEME_FOOTER_ICON_URL")
     if footer_icon:
         embed.set_footer(text=footer_text, icon_url=footer_icon)
@@ -236,6 +236,10 @@ def state_label(state: int) -> str:
         return "🟡 Paused"
     return "⚪ Not Started"
 
+def tracker_jump_link(guild_id: int, channel_id: int, message_id: int) -> str:
+    # Works for channels + threads (threads still live under the parent channel ID in Discord links)
+    return f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}"
+
 def build_embed(message_id: int) -> discord.Embed:
     state, _, _, _ = get_session(message_id)
     elapsed = session_elapsed_seconds(message_id)
@@ -256,7 +260,6 @@ def build_embed(message_id: int) -> discord.Embed:
         roster = "*No adventurers signed in yet.*"
 
     embed.add_field(name="Roster", value=roster[:1024], inline=False)
-
     return apply_theme(embed)
 
 async def update_tracker_message(message_id: int):
@@ -278,18 +281,12 @@ async def update_tracker_message(message_id: int):
 
     view = RPView(message_id)
     await msg.edit(embed=build_embed(message_id), view=view)
-
-    # Persistent view registration for restarts
     bot.add_view(view)
 
 # =========================
 # TIME TICKER (background)
 # =========================
 def tick_running_sessions():
-    """
-    Update participants.seconds for sessions that are RUNNING.
-    Only participants with last_tick NOT NULL accrue time.
-    """
     now = time.time()
     conn = db()
     cur = conn.cursor()
@@ -341,12 +338,7 @@ async def ticker_loop():
 class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
     name = discord.ui.TextInput(label="Character Name", max_length=64)
     level = discord.ui.TextInput(label="Level (1-20)", max_length=3)
-    capped = discord.ui.TextInput(
-        label="Capped? (yes/no)",
-        required=False,
-        max_length=5,
-        placeholder="no"
-    )
+    capped = discord.ui.TextInput(label="Capped? (yes/no)", required=False, max_length=5, placeholder="no")
 
     def __init__(self, message_id: int):
         super().__init__()
@@ -358,10 +350,7 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
             if not (1 <= lvl <= 20):
                 raise ValueError
         except ValueError:
-            return await interaction.response.send_message(
-                "Level must be a number between 1 and 20.",
-                ephemeral=True,
-            )
+            return await interaction.response.send_message("Level must be a number between 1 and 20.", ephemeral=True)
 
         cname = str(self.name.value).strip()
         if not cname:
@@ -373,52 +362,35 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
         conn = db()
         cur = conn.cursor()
 
-        # Preserve accumulated seconds if editing
         cur.execute("""
             INSERT OR REPLACE INTO participants
             (message_id, user_id, character, level, seconds, last_tick, capped)
             VALUES (?, ?, ?, ?, COALESCE(
                 (SELECT seconds FROM participants WHERE message_id=? AND user_id=?), 0
             ), NULL, ?)
-        """, (
-            self.message_id,
-            interaction.user.id,
-            cname,
-            lvl,
-            self.message_id,
-            interaction.user.id,
-            is_capped
-        ))
+        """, (self.message_id, interaction.user.id, cname, lvl, self.message_id, interaction.user.id, is_capped))
 
-        # If session is running, auto-start their personal timer now
         state, _, _, _ = get_session(self.message_id)
         if state == 1:
             now = time.time()
-            cur.execute("""
-                UPDATE participants SET last_tick=?
-                WHERE message_id=? AND user_id=?
-            """, (now, self.message_id, interaction.user.id))
+            cur.execute("UPDATE participants SET last_tick=? WHERE message_id=? AND user_id=?",
+                        (now, self.message_id, interaction.user.id))
 
         conn.commit()
         conn.close()
 
         cap_txt = " (Capped: 🗝️/hr)" if is_capped else ""
-        await interaction.response.send_message(
-            f"✅ Signed in: **{cname}** (lvl {lvl}){cap_txt}",
-            ephemeral=True
-        )
-
+        await interaction.response.send_message(f"✅ Signed in: **{cname}** (lvl {lvl}){cap_txt}", ephemeral=True)
         await update_tracker_message(self.message_id)
 
 # =========================
-# VIEW (buttons: labels + rows)
+# VIEW
 # =========================
 class RPView(discord.ui.View):
     def __init__(self, message_id: int):
         super().__init__(timeout=None)
         self.message_id = message_id
 
-        # Row 0: player actions
         self.join_btn = discord.ui.Button(
             label="✅ Join", style=discord.ButtonStyle.success,
             custom_id=f"rp_join:{message_id}", row=0
@@ -432,7 +404,6 @@ class RPView(discord.ui.View):
             custom_id=f"rp_rejoin:{message_id}", row=0
         )
 
-        # Row 1: DM actions
         self.start_btn = discord.ui.Button(
             label="▶️ Start", style=discord.ButtonStyle.primary,
             custom_id=f"rp_start:{message_id}", row=1
@@ -446,7 +417,6 @@ class RPView(discord.ui.View):
             custom_id=f"rp_resume:{message_id}", row=1
         )
 
-        # Row 2: DM only
         self.end_btn = discord.ui.Button(
             label="🏁 End", style=discord.ButtonStyle.danger,
             custom_id=f"rp_end:{message_id}", row=2
@@ -468,20 +438,16 @@ class RPView(discord.ui.View):
         self.add_item(self.resume_btn)
         self.add_item(self.end_btn)
 
-    # -------- Player buttons --------
     async def join_cb(self, interaction: discord.Interaction):
         await interaction.response.send_modal(JoinModal(self.message_id))
 
     async def leave_cb(self, interaction: discord.Interaction):
-        """Stop time tracking ONLY for the clicker."""
         now = time.time()
         conn = db()
         cur = conn.cursor()
 
-        cur.execute("""
-            SELECT last_tick, seconds FROM participants
-            WHERE message_id=? AND user_id=?
-        """, (self.message_id, interaction.user.id))
+        cur.execute("SELECT last_tick, seconds FROM participants WHERE message_id=? AND user_id=?",
+                    (self.message_id, interaction.user.id))
         row = cur.fetchone()
 
         if not row:
@@ -490,17 +456,11 @@ class RPView(discord.ui.View):
             return
 
         last_tick, secs = row[0], float(row[1] or 0.0)
-
         if last_tick is not None:
-            delta = max(0.0, now - float(last_tick))
-            secs += delta
+            secs += max(0.0, now - float(last_tick))
 
-        cur.execute("""
-            UPDATE participants
-            SET seconds=?, last_tick=NULL
-            WHERE message_id=? AND user_id=?
-        """, (secs, self.message_id, interaction.user.id))
-
+        cur.execute("UPDATE participants SET seconds=?, last_tick=NULL WHERE message_id=? AND user_id=?",
+                    (secs, self.message_id, interaction.user.id))
         conn.commit()
         conn.close()
 
@@ -508,7 +468,6 @@ class RPView(discord.ui.View):
         await update_tracker_message(self.message_id)
 
     async def rejoin_cb(self, interaction: discord.Interaction):
-        """Restart time tracking ONLY for the clicker if session is running."""
         state, _, _, _ = get_session(self.message_id)
 
         conn = db()
@@ -534,14 +493,12 @@ class RPView(discord.ui.View):
         now = time.time()
         cur.execute("UPDATE participants SET last_tick=? WHERE message_id=? AND user_id=?",
                     (now, self.message_id, interaction.user.id))
-
         conn.commit()
         conn.close()
 
         await interaction.response.send_message("🔁 You’re back in. Your timer is running again.", ephemeral=True)
         await update_tracker_message(self.message_id)
 
-    # -------- DM buttons --------
     def _require_dm(self, interaction: discord.Interaction) -> bool:
         return interaction.user.guild_permissions.manage_guild
 
@@ -569,9 +526,7 @@ class RPView(discord.ui.View):
             (now, interaction.channel_id, float(run_seconds or 0.0), self.message_id)
         )
 
-        # Start accruing for everyone currently participating
         cur.execute("UPDATE participants SET last_tick=? WHERE message_id=?", (now, self.message_id))
-
         conn.commit()
         conn.close()
 
@@ -591,12 +546,12 @@ class RPView(discord.ui.View):
         tick_running_sessions()
 
         now = time.time()
-        add = max(0.0, now - started_at)
-        new_run = float(run_seconds or 0.0) + add
+        new_run = float(run_seconds or 0.0) + max(0.0, now - started_at)
 
         conn = db()
         cur = conn.cursor()
-        cur.execute("UPDATE sessions SET state=2, started_at=NULL, run_seconds=? WHERE message_id=?", (new_run, self.message_id))
+        cur.execute("UPDATE sessions SET state=2, started_at=NULL, run_seconds=? WHERE message_id=?",
+                    (new_run, self.message_id))
         cur.execute("UPDATE participants SET last_tick=NULL WHERE message_id=?", (self.message_id,))
         conn.commit()
         conn.close()
@@ -617,13 +572,9 @@ class RPView(discord.ui.View):
         now = time.time()
         conn = db()
         cur = conn.cursor()
-        cur.execute(
-            "UPDATE sessions SET state=1, started_at=?, run_seconds=? WHERE message_id=?",
-            (now, float(run_seconds or 0.0), self.message_id)
-        )
-        # Resume for everyone; individual players can opt out via Leave
+        cur.execute("UPDATE sessions SET state=1, started_at=?, run_seconds=? WHERE message_id=?",
+                    (now, float(run_seconds or 0.0), self.message_id))
         cur.execute("UPDATE participants SET last_tick=? WHERE message_id=?", (now, self.message_id))
-
         conn.commit()
         conn.close()
 
@@ -635,9 +586,8 @@ class RPView(discord.ui.View):
             await interaction.response.send_message("DM/Staff only.", ephemeral=True)
             return
 
-        state, started_at, run_seconds, _ = get_session(self.message_id)
+        state, started_at, run_seconds, channel_id = get_session(self.message_id)
 
-        # Final tick for anyone still accruing
         if state == 1 and started_at is not None:
             tick_running_sessions()
             now = time.time()
@@ -653,23 +603,28 @@ class RPView(discord.ui.View):
         conn.commit()
         conn.close()
 
-        # Rewards summary (XP or 🗝️, plus GP always)
         parts = list_participants(self.message_id)
         lines = []
         for uid, char, lvl, secs, cap in parts:
             awarded = reward_hours(secs)
             gp = gp_per_hour_for_level(lvl) * awarded
-
             if cap:
-                keys = awarded  # 1 🗝️ per rewarded hour
+                keys = awarded
                 lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) → **{awarded}h**: 🗝️ {keys} | {gp} GP")
             else:
                 xp = xp_per_hour_for_level(lvl) * awarded
                 lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) → **{awarded}h**: {xp} XP | {gp} GP")
 
-        await interaction.response.send_message(
-            "🏁 **Guild Ledger Closed — Rewards Issued**\n" + ("\n".join(lines) if lines else "(no participants)")
-        )
+        # 🔗 Add jump link to the tracker message
+        guild_id = interaction.guild_id or 0
+        chan_id = channel_id or interaction.channel_id
+        link = tracker_jump_link(guild_id, chan_id, self.message_id)
+
+        reward_text = "🏁 **Guild Ledger Closed — Rewards Issued**\n"
+        reward_text += ("🔗 Tracker: " + link + "\n\n")
+        reward_text += ("\n".join(lines) if lines else "(no participants)")
+
+        await interaction.response.send_message(reward_text)
         await update_tracker_message(self.message_id)
 
 # =========================
@@ -677,12 +632,10 @@ class RPView(discord.ui.View):
 # =========================
 @bot.tree.command(name="rpbegin", description="Post an Adventurer’s Guild RP tracker.")
 async def post_tracker(interaction: discord.Interaction):
-    # Post initial embed
     temp = apply_theme(discord.Embed(title="📜 Opening a new Guild Ledger…", description="Preparing the session log."))
     await interaction.response.send_message(embed=temp)
     msg = await interaction.original_response()
 
-    # Store session
     conn = db()
     cur = conn.cursor()
     cur.execute(
@@ -693,16 +646,13 @@ async def post_tracker(interaction: discord.Interaction):
     conn.commit()
     conn.close()
 
-    # Attach view and themed embed
     view = RPView(msg.id)
     await msg.edit(embed=build_embed(msg.id), view=view)
     bot.add_view(view)
 
-    # Pin the message (requires Manage Messages in that channel/thread)
     try:
         await msg.pin(reason="Adventurer’s Guild RP Tracker")
     except discord.Forbidden:
-        # If missing permissions, don't fail the command
         await interaction.followup.send(
             "ℹ️ I couldn’t pin the tracker (missing **Manage Messages** permission here).",
             ephemeral=True
@@ -735,7 +685,6 @@ async def on_app_command_error(interaction: discord.Interaction, error: Exceptio
 # =========================
 @bot.event
 async def on_ready():
-    # Re-register persistent views for existing trackers
     conn = db()
     cur = conn.cursor()
     cur.execute("SELECT message_id FROM sessions")
