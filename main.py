@@ -243,7 +243,7 @@ def build_embed(message_id: int) -> discord.Embed:
 
     embed = discord.Embed(
         title="📜 Adventurer’s Guild — RP Session Log",
-        description="A registrar’s record of attendance and session time."
+        description="The Grandmaster’s record of attendance and session time."
     )
 
     embed.add_field(name="Status", value=state_label(state), inline=True)
