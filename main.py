@@ -242,8 +242,8 @@ def build_embed(message_id: int) -> discord.Embed:
     parts = list_participants(message_id)
 
     embed = discord.Embed(
-        title="📜 Adventurer’s Guild — RP Session Log",
-        description="The Grandmaster’s record of attendance and session time."
+        title="📜 The Grandmaster's Guild — RP Session Log",
+        description="The registrar's record of attendance and session time."
     )
 
     embed.add_field(name="Status", value=state_label(state), inline=True)
@@ -675,7 +675,7 @@ class RPView(discord.ui.View):
 # =========================
 # SLASH COMMAND
 # =========================
-@bot.tree.command(name="post_rp_tracker", description="Post an Adventurer’s Guild RP tracker.")
+@bot.tree.command(name="rpbegin", description="Post an Adventurer’s Guild RP tracker.")
 async def post_tracker(interaction: discord.Interaction):
     # Post initial embed
     temp = apply_theme(discord.Embed(title="📜 Opening a new Guild Ledger…", description="Preparing the session log."))
