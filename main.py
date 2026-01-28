@@ -234,7 +234,7 @@ def build_embed(message_id: int) -> discord.Embed:
         roster_lines = []
         for uid, char, lvl, _secs, cap in parts:
             extra = " (Capped)" if cap else ""
-            roster_lines.append(f"<@{uid}> — **{char}** (lv {lvl}){extra}")
+            roster_lines.append(f"<@{uid}> — **{char}** (lvl {lvl}){extra}")
         roster = "\n".join(roster_lines)
     else:
         roster = "*No adventurers signed in yet.*"
