@@ -736,12 +736,12 @@ class RPView(discord.ui.View):
                     add_keys(uid, keys)
                 # Formatting: Name • Character (Lvl X) | Time | Keys | GP
                 lines.append(
-                    f"• <@{uid}> — **{char}** *(Lvl {lvl})* | **{awarded}h** | 🗝️ **{keys}** | 💰 **{gp} GP**"
+                    f"• <@{uid}> — **{char}** *(Lvl {lvl})* | **{awarded}h** | 🗝️ **{keys}** |  **{gp} GP**"
                 )
             else:
                 xp = xp_per_hour_for_level(lvl) * awarded
                 lines.append(
-                    f"• <@{uid}> — **{char}** *(Lvl {lvl})* | **{awarded}h** | ✨ **{xp} XP** | 💰 **{gp} GP**"
+                    f"• <@{uid}> — **{char}** *(Lvl {lvl})* | **{awarded}h** |  **{xp} XP** |  **{gp} GP**"
                 )
 
         # Send rewards as plain text first (so we can get jump_url for End)
