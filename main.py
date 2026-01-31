@@ -129,7 +129,7 @@ def theme_color() -> discord.Color:
     except Exception:
         return discord.Color.gold()
 
-def apply_theme(embed: discord.Embed) -> discord.Embed:
+def apply_theme(embed: discord.Embed, *, footer_text_override: Optional[str] = None) -> discord.Embed:
     embed.color = theme_color()
 
     thumb = os.getenv("THEME_THUMBNAIL_URL")
@@ -143,10 +143,11 @@ def apply_theme(embed: discord.Embed) -> discord.Embed:
     guild_name = os.getenv("THEME_NAME", "Adventurer’s Guild Ledger")
     embed.set_author(name=guild_name)
 
-    footer_text = os.getenv(
+    footer_text = footer_text_override if footer_text_override is not None else os.getenv(
         "THEME_FOOTER_TEXT",
         "Stamped & filed by the Guild Registrar • Rewards granted on 45-minute marks"
     )
+
     footer_icon = os.getenv("THEME_FOOTER_ICON_URL")
     if footer_icon:
         embed.set_footer(text=footer_text, icon_url=footer_icon)
@@ -246,19 +247,8 @@ def build_key_embed(member: discord.Member, current: int, lifetime: int) -> disc
     if key_thumb:
         embed.set_thumbnail(url=key_thumb)
 
-    return apply_theme(embed)
-
-def build_key_change_embed(member: discord.Member, delta: int, reason: Optional[str], *, actor: discord.Member) -> discord.Embed:
-    title = "🗝️ Guild Key Ledger — Entry Filed"
-    desc = "The registrar stamps a change into the guild ledger."
-    embed = discord.Embed(title=title, description=desc, color=theme_color())
-
-    embed.add_field(name="Name", value=member.mention, inline=False)
-    embed.add_field(name="Keys Earned", value=f"**{delta:+d}** 🗝️", inline=False)
-    embed.add_field(name="Reason", value=(reason or "*No reason provided.*"), inline=False)
-    embed.add_field(name="Filed By", value=actor.mention, inline=False)
-
-    return apply_theme(embed)
+    # CHANGE #2: Keyring footer should NOT include the 45-minute rewards clause
+    return apply_theme(embed, footer_text_override="Stamped & filed by the Guild Registrar")
 
 # =========================
 # HELPERS (SESSIONS)
@@ -720,7 +710,7 @@ class RPView(discord.ui.View):
 
 # =========================
 # END SESSION CORE (used by button + /rpend)
-# Rewards output is NOT an embed (per your preference).
+# Rewards output is NOT an embed.
 # =========================
 async def end_session_and_post_rewards(interaction: discord.Interaction, message_id: int):
     # Defer so Discord never times out
@@ -755,9 +745,7 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
     parts = list_participants(message_id)
     start_link = tracker_url(guild_id, channel_id, message_id)
 
-    # Build rewards text (format like your screenshot lines)
     header = "🏁 **Guild Ledger Closed — Rewards Issued**\nThe registrar tallies the earnings and stamps the record.\n"
-    links = f"🔗 **Start:** {start_link}\n"
     lines = []
 
     for uid, char, lvl, secs, cap in parts:
@@ -775,13 +763,14 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
     if not lines:
         lines = ["*(no participants)*"]
 
-    content = header + links + "\n".join(lines)
+    # CHANGE #1: Links go at the bottom (Start/End)
+    content = header + "\n".join(lines)
 
-    # Send rewards message, then edit to add End jump link
     rewards_msg = await interaction.followup.send(content, wait=True)
     try:
         end_link = rewards_msg.jump_url
-        await rewards_msg.edit(content=rewards_msg.content + f"\n\n🔗 **End:** {end_link}")
+        links_bottom = f"\n\n🔗 **Start:** {start_link}\n🔗 **End:** {end_link}"
+        await rewards_msg.edit(content=rewards_msg.content + links_bottom)
     except Exception:
         pass
 
@@ -812,12 +801,10 @@ async def rpbegin(interaction: discord.Interaction):
     conn.commit()
     conn.close()
 
-    # Attach view + full embed
     view = RPView(msg.id)
     await msg.edit(embed=build_embed(msg.id), view=view)
     bot.add_view(view)
 
-    # Pin it
     try:
         await msg.pin(reason="Adventurer’s Guild RP Tracker")
     except Exception:
@@ -825,10 +812,8 @@ async def rpbegin(interaction: discord.Interaction):
 
 @bot.tree.command(name="rpend", description="End the active RP session in this channel/thread.")
 async def rpend(interaction: discord.Interaction):
-    # Quick defer to prevent timeouts
     await interaction.response.defer(thinking=False)
 
-    # Find most recent session in this channel that is active or paused
     conn = db()
     cur = conn.cursor()
     cur.execute("""
@@ -851,7 +836,9 @@ async def rpend(interaction: discord.Interaction):
 # =========================
 # PREFIX COMMAND: !key
 # - !key -> show keyring embed
-# - !key +# "Reason" / !key -# "Reason" -> staff only, modifies own keys and posts a ledger entry embed + keyring embed
+# - !key +# "Reason" / !key -# "Reason" -> staff only, modifies own keys and posts:
+#    (1) plain text ledger entry (your format)
+#    (2) updated keyring embed
 # =========================
 @bot.command(name="key")
 async def key_cmd(ctx: commands.Context, amount: Optional[str] = None, *, reason: Optional[str] = None):
@@ -886,16 +873,18 @@ async def key_cmd(ctx: commands.Context, amount: Optional[str] = None, *, reason
 
     current, lifetime = keys_get(ctx.guild.id, target.id)
 
-    audit_embed = build_key_change_embed(
-        target,
-        delta=delta,
-        reason=reason,
-        actor=ctx.author
+    # CHANGE #3: Ledger entry is plain text (not an embed), in your exact format
+    reason_text = reason if reason else "*No reason provided.*"
+    ledger_text = (
+        f"Name: {target.mention}\n"
+        f"Keys Earned: {delta:+d} 🗝️\n"
+        f"For: {reason_text}"
     )
+
     keyring_embed = build_key_embed(target, current, lifetime)
 
-    # Send BOTH: ledger entry + updated keyring
-    await ctx.send(embeds=[audit_embed, keyring_embed])
+    await ctx.send(ledger_text)
+    await ctx.send(embed=keyring_embed)
 
 # =========================
 # ERROR HANDLER
@@ -922,7 +911,6 @@ async def on_app_command_error(interaction: discord.Interaction, error: Exceptio
 # =========================
 @bot.event
 async def on_ready():
-    # Re-register persistent views for existing trackers
     conn = db()
     cur = conn.cursor()
     cur.execute("SELECT message_id FROM sessions")
