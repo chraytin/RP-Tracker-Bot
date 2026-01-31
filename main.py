@@ -1,5 +1,4 @@
 import os
-import re
 import time
 import sqlite3
 import asyncio
@@ -161,7 +160,10 @@ def apply_theme(embed: discord.Embed) -> discord.Embed:
 # =========================
 intents = discord.Intents.default()
 intents.guilds = True
-intents.message_content = True  # required for !key (enable in Developer Portal)
+
+# Required for prefix command !key (Message Content Intent must be enabled in Dev Portal)
+intents.message_content = True
+
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # =========================
@@ -237,13 +239,24 @@ def keys_sub(guild_id: int, user_id: int, amount: int):
 def build_key_embed(member: discord.Member, current: int, lifetime: int) -> discord.Embed:
     title = f"🗝️ {member.display_name}'s Keyring"
     embed = discord.Embed(title=title, description="", color=theme_color())
-
-    embed.add_field(name="Current Keys", value=f"🗝️ **{current}**", inline=False)
-    embed.add_field(name="Lifetime Keys", value=f"📜 **{lifetime}**", inline=False)
+    embed.add_field(name="Current Keys", value=str(current), inline=False)
+    embed.add_field(name="Lifetime Keys", value=str(lifetime), inline=False)
 
     key_thumb = os.getenv("KEY_THUMBNAIL_URL") or os.getenv("THEME_THUMBNAIL_URL")
     if key_thumb:
         embed.set_thumbnail(url=key_thumb)
+
+    return apply_theme(embed)
+
+def build_key_change_embed(member: discord.Member, delta: int, reason: Optional[str], *, actor: discord.Member) -> discord.Embed:
+    title = "🗝️ Guild Key Ledger — Entry Filed"
+    desc = "The registrar stamps a change into the guild ledger."
+    embed = discord.Embed(title=title, description=desc, color=theme_color())
+
+    embed.add_field(name="Name", value=member.mention, inline=False)
+    embed.add_field(name="Keys Earned", value=f"**{delta:+d}** 🗝️", inline=False)
+    embed.add_field(name="Reason", value=(reason or "*No reason provided.*"), inline=False)
+    embed.add_field(name="Filed By", value=actor.mention, inline=False)
 
     return apply_theme(embed)
 
@@ -707,6 +720,7 @@ class RPView(discord.ui.View):
 
 # =========================
 # END SESSION CORE (used by button + /rpend)
+# Rewards output is NOT an embed (per your preference).
 # =========================
 async def end_session_and_post_rewards(interaction: discord.Interaction, message_id: int):
     # Defer so Discord never times out
@@ -715,7 +729,10 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
 
     state, started_at, run_seconds, channel_id, guild_id = get_session(message_id)
     if not channel_id or not guild_id:
-        await interaction.followup.send("❌ Could not locate this session in the ledger.", ephemeral=True)
+        try:
+            await interaction.followup.send("❌ Could not locate this session in the ledger.", ephemeral=True)
+        except Exception:
+            pass
         return
 
     # Final tick for anyone still accruing
@@ -738,36 +755,33 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
     parts = list_participants(message_id)
     start_link = tracker_url(guild_id, channel_id, message_id)
 
-    # Plain-text rewards output (NOT an embed)
+    # Build rewards text (format like your screenshot lines)
+    header = "🏁 **Guild Ledger Closed — Rewards Issued**\nThe registrar tallies the earnings and stamps the record.\n"
+    links = f"🔗 **Start:** {start_link}\n"
     lines = []
+
     for uid, char, lvl, secs, cap in parts:
         hrs = reward_hours(secs)
         gp = gp_per_hour_for_level(lvl) * hrs
 
         if cap:
             keys = hrs
-            if keys > 0:
-                keys_add(guild_id, uid, keys)
-            lines.append(f"• <@{uid}> — **{char}** (lvl {lvl}) — **{keys}** 🗝️, **{gp}** gp")
+            keys_add(guild_id, uid, keys)
+            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{keys}** 🗝️, **{gp}** gp")
         else:
             xp = xp_per_hour_for_level(lvl) * hrs
-            lines.append(f"• <@{uid}> — **{char}** (lvl {lvl}) — **{xp}** xp, **{gp}** gp")
+            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{xp}** xp, **{gp}** gp")
 
     if not lines:
-        lines = ["• *(no participants)*"]
+        lines = ["*(no participants)*"]
 
-    content = (
-        "🏁 **Guild Ledger Closed — Rewards Issued**\n"
-        "The registrar tallies the earnings and stamps the record.\n\n"
-        f"🔗 **Start:** {start_link}\n\n"
-        + "\n".join(lines)
-    )
+    content = header + links + "\n".join(lines)
 
+    # Send rewards message, then edit to add End jump link
     rewards_msg = await interaction.followup.send(content, wait=True)
-
-    # Add End link to the same rewards post
     try:
-        await rewards_msg.edit(content=rewards_msg.content + f"\n\n🔗 **End:** {rewards_msg.jump_url}")
+        end_link = rewards_msg.jump_url
+        await rewards_msg.edit(content=rewards_msg.content + f"\n\n🔗 **End:** {end_link}")
     except Exception:
         pass
 
@@ -811,7 +825,10 @@ async def rpbegin(interaction: discord.Interaction):
 
 @bot.tree.command(name="rpend", description="End the active RP session in this channel/thread.")
 async def rpend(interaction: discord.Interaction):
-    # Find most recent ACTIVE/PAUSED session in this channel
+    # Quick defer to prevent timeouts
+    await interaction.response.defer(thinking=False)
+
+    # Find most recent session in this channel that is active or paused
     conn = db()
     cur = conn.cursor()
     cur.execute("""
@@ -825,7 +842,7 @@ async def rpend(interaction: discord.Interaction):
     conn.close()
 
     if not row:
-        await interaction.response.send_message("❌ No active tracker found in this channel.", ephemeral=True)
+        await interaction.followup.send("❌ No active tracker found in this channel.", ephemeral=True)
         return
 
     message_id = int(row[0])
@@ -833,68 +850,52 @@ async def rpend(interaction: discord.Interaction):
 
 # =========================
 # PREFIX COMMAND: !key
+# - !key -> show keyring embed
+# - !key +# "Reason" / !key -# "Reason" -> staff only, modifies own keys and posts a ledger entry embed + keyring embed
 # =========================
 @bot.command(name="key")
-async def key_cmd(ctx: commands.Context, *args: str):
-    """
-    !key
-    !key @user
-    !key +5
-    !key -2
-    !key @user +5
-    !key @user -2
-    """
-    if not ctx.guild:
-        return await ctx.send("❌ Keys can only be tracked inside a server.")
+async def key_cmd(ctx: commands.Context, amount: Optional[str] = None, *, reason: Optional[str] = None):
+    # Display: !key
+    if amount is None:
+        current, lifetime = keys_get(ctx.guild.id, ctx.author.id)
+        embed = build_key_embed(ctx.author, current, lifetime)
+        await ctx.send(embed=embed)
+        return
 
-    guild_id = ctx.guild.id
+    # Modify: staff only
+    if not ctx.author.guild_permissions.manage_guild:
+        await ctx.send("❌ Staff only (Manage Guild required) to modify keys.")
+        return
 
-    # Identify optional mention + optional delta
+    try:
+        delta = int(amount.strip())
+    except Exception:
+        await ctx.send('Usage: `!key` or `!key +3 "Reason"` or `!key -2 "Reason"`')
+        return
+
+    if delta == 0:
+        await ctx.send("That would change nothing. 🙂")
+        return
+
     target = ctx.author
-    delta = None
 
-    tokens = list(args)
+    if delta > 0:
+        keys_add(ctx.guild.id, target.id, delta)
+    else:
+        keys_sub(ctx.guild.id, target.id, abs(delta))
 
-    # If first token is a mention or an ID
-    if tokens:
-        m = re.fullmatch(r"<@!?(\d+)>", tokens[0])
-        if m:
-            uid = int(m.group(1))
-            member = ctx.guild.get_member(uid)
-            if member:
-                target = member
-                tokens = tokens[1:]
-        else:
-            # raw ID
-            if tokens[0].isdigit():
-                uid = int(tokens[0])
-                member = ctx.guild.get_member(uid)
-                if member:
-                    target = member
-                    tokens = tokens[1:]
+    current, lifetime = keys_get(ctx.guild.id, target.id)
 
-    if tokens:
-        # could be +5 / -2 / 7
-        try:
-            delta = int(tokens[0])
-        except Exception:
-            try:
-                delta = int(tokens[0].replace("+", ""))
-            except Exception:
-                delta = None
+    audit_embed = build_key_change_embed(
+        target,
+        delta=delta,
+        reason=reason,
+        actor=ctx.author
+    )
+    keyring_embed = build_key_embed(target, current, lifetime)
 
-    # Modify (staff only) if delta provided
-    if delta is not None:
-        if not ctx.author.guild_permissions.manage_guild:
-            return await ctx.send("❌ Staff only (Manage Guild required) to modify keys.")
-        if delta > 0:
-            keys_add(guild_id, target.id, delta)
-        elif delta < 0:
-            keys_sub(guild_id, target.id, abs(delta))
-
-    current, lifetime = keys_get(guild_id, target.id)
-    embed = build_key_embed(target, current, lifetime)
-    await ctx.send(embed=embed)
+    # Send BOTH: ledger entry + updated keyring
+    await ctx.send(embeds=[audit_embed, keyring_embed])
 
 # =========================
 # ERROR HANDLER
