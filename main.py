@@ -29,10 +29,6 @@ def ensure_schema():
     conn = db()
     cur = conn.cursor()
 
-    # sessions:
-    # state: 0=stopped, 1=running, 2=paused
-    # started_at: when running began (current segment)
-    # run_seconds: accumulated running time across start/pause/continue
     cur.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             message_id INTEGER PRIMARY KEY,
@@ -44,10 +40,6 @@ def ensure_schema():
         )
     """)
 
-    # participants:
-    # seconds: total accrued time for this participant in this session
-    # last_tick: if not NULL, they are currently accruing time (personal timer running)
-    # capped: 0/1 (if 1, earn 🗝️ per hour instead of XP; GP still applies)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS participants (
             message_id INTEGER,
@@ -61,9 +53,6 @@ def ensure_schema():
         )
     """)
 
-    # keys ledger:
-    # current = spendable current keys
-    # lifetime = lifetime keys earned (never decreases)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS keys (
             guild_id INTEGER,
@@ -161,9 +150,7 @@ def apply_theme(embed: discord.Embed, *, footer_text_override: Optional[str] = N
 # =========================
 intents = discord.Intents.default()
 intents.guilds = True
-
-# Required for prefix command !key (Message Content Intent must be enabled in Dev Portal)
-intents.message_content = True
+intents.message_content = True  # Required for prefix command !key
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -247,7 +234,6 @@ def build_key_embed(member: discord.Member, current: int, lifetime: int) -> disc
     if key_thumb:
         embed.set_thumbnail(url=key_thumb)
 
-    # Keyring footer should NOT include the 45-minute rewards clause
     return apply_theme(embed, footer_text_override="Stamped & filed by the Guild Registrar")
 
 # =========================
@@ -364,10 +350,6 @@ async def update_tracker_message(message_id: int):
 # TIME TICKER
 # =========================
 def tick_running_sessions():
-    """
-    Update participants.seconds for sessions that are RUNNING.
-    Only participants with last_tick NOT NULL accrue time.
-    """
     now = time.time()
     conn = db()
     cur = conn.cursor()
@@ -451,7 +433,6 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
         conn = db()
         cur = conn.cursor()
 
-        # preserve accumulated seconds if editing
         cur.execute("""
             INSERT OR REPLACE INTO participants
             (message_id, user_id, character, level, seconds, last_tick, capped)
@@ -468,7 +449,6 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
             is_capped
         ))
 
-        # if session is running, auto-start their personal timer
         state, _, _, _, _ = get_session(self.message_id)
         if state == 1:
             now = time.time()
@@ -495,7 +475,6 @@ class RPView(discord.ui.View):
         super().__init__(timeout=None)
         self.message_id = message_id
 
-        # Row 0: player actions
         self.join_btn = discord.ui.Button(
             label="✅ Join", style=discord.ButtonStyle.success,
             custom_id=f"rp_join:{message_id}", row=0
@@ -509,7 +488,6 @@ class RPView(discord.ui.View):
             custom_id=f"rp_rejoin:{message_id}", row=0
         )
 
-        # Row 1: staff actions
         self.start_btn = discord.ui.Button(
             label="▶️ Start", style=discord.ButtonStyle.primary,
             custom_id=f"rp_start:{message_id}", row=1
@@ -523,7 +501,6 @@ class RPView(discord.ui.View):
             custom_id=f"rp_resume:{message_id}", row=1
         )
 
-        # Row 2: staff only
         self.end_btn = discord.ui.Button(
             label="🏁 End", style=discord.ButtonStyle.danger,
             custom_id=f"rp_end:{message_id}", row=2
@@ -545,14 +522,10 @@ class RPView(discord.ui.View):
         self.add_item(self.resume_btn)
         self.add_item(self.end_btn)
 
-    def _require_staff(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.guild_permissions.manage_guild
-
     async def join_cb(self, interaction: discord.Interaction):
         await interaction.response.send_modal(JoinModal(self.message_id))
 
     async def leave_cb(self, interaction: discord.Interaction):
-        """Stop time tracking ONLY for the clicker."""
         now = time.time()
         conn = db()
         cur = conn.cursor()
@@ -585,7 +558,6 @@ class RPView(discord.ui.View):
         await update_tracker_message(self.message_id)
 
     async def rejoin_cb(self, interaction: discord.Interaction):
-        """Restart time tracking ONLY for the clicker if session is running."""
         state, _, _, _, _ = get_session(self.message_id)
 
         conn = db()
@@ -619,10 +591,6 @@ class RPView(discord.ui.View):
         await update_tracker_message(self.message_id)
 
     async def start_cb(self, interaction: discord.Interaction):
-        if not self._require_staff(interaction):
-            await interaction.response.send_message("Staff only.", ephemeral=True)
-            return
-
         state, _, run_seconds, _, _ = get_session(self.message_id)
         if state == 1:
             await interaction.response.send_message("Already running.", ephemeral=True)
@@ -642,7 +610,6 @@ class RPView(discord.ui.View):
             (now, interaction.channel_id, interaction.guild_id, float(run_seconds or 0.0), self.message_id)
         )
 
-        # start accruing for everyone currently participating
         cur.execute("UPDATE participants SET last_tick=? WHERE message_id=?", (now, self.message_id))
 
         conn.commit()
@@ -652,10 +619,6 @@ class RPView(discord.ui.View):
         await update_tracker_message(self.message_id)
 
     async def pause_cb(self, interaction: discord.Interaction):
-        if not self._require_staff(interaction):
-            await interaction.response.send_message("Staff only.", ephemeral=True)
-            return
-
         state, started_at, run_seconds, _, _ = get_session(self.message_id)
         if state != 1 or started_at is None:
             await interaction.response.send_message("Not currently running.", ephemeral=True)
@@ -677,10 +640,6 @@ class RPView(discord.ui.View):
         await update_tracker_message(self.message_id)
 
     async def resume_cb(self, interaction: discord.Interaction):
-        if not self._require_staff(interaction):
-            await interaction.response.send_message("Staff only.", ephemeral=True)
-            return
-
         state, _, run_seconds, _, _ = get_session(self.message_id)
         if state != 2:
             await interaction.response.send_message("Not currently paused.", ephemeral=True)
@@ -693,7 +652,6 @@ class RPView(discord.ui.View):
             "UPDATE sessions SET state=1, started_at=?, run_seconds=? WHERE message_id=?",
             (now, float(run_seconds or 0.0), self.message_id)
         )
-        # resume for everyone; individual players can opt out via Leave
         cur.execute("UPDATE participants SET last_tick=? WHERE message_id=?", (now, self.message_id))
 
         conn.commit()
@@ -703,17 +661,13 @@ class RPView(discord.ui.View):
         await update_tracker_message(self.message_id)
 
     async def end_cb(self, interaction: discord.Interaction):
-        if not self._require_staff(interaction):
-            await interaction.response.send_message("Staff only.", ephemeral=True)
-            return
         await end_session_and_post_rewards(interaction, self.message_id)
 
 # =========================
-# END SESSION CORE (used by button + /rpend)
+# END SESSION CORE
 # Rewards output is NOT an embed.
 # =========================
 async def end_session_and_post_rewards(interaction: discord.Interaction, message_id: int):
-    # Defer so Discord never times out
     if not interaction.response.is_done():
         await interaction.response.defer(thinking=False)
 
@@ -725,13 +679,11 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
             pass
         return
 
-    # Final tick for anyone still accruing
     if state == 1 and started_at is not None:
         tick_running_sessions()
         now = time.time()
         run_seconds = float(run_seconds or 0.0) + max(0.0, now - started_at)
 
-    # Stop session + stop all personal timers
     conn = db()
     cur = conn.cursor()
     cur.execute(
@@ -755,12 +707,10 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
         if cap:
             keys = hrs
             keys_add(guild_id, uid, keys)
-            # ✅ NEW: include hours rewarded
-            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp")
+            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{keys}** 🗝️, **{gp}** gp")
         else:
             xp = xp_per_hour_for_level(lvl) * hrs
-            # ✅ NEW: include hours rewarded
-            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{xp}** xp, **{gp}** gp")
+            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{xp}** xp, **{gp}** gp")
 
     if not lines:
         lines = ["*(no participants)*"]
@@ -790,7 +740,6 @@ async def rpbegin(interaction: discord.Interaction):
     ))
     msg = await interaction.followup.send(embed=temp, wait=True)
 
-    # Store session
     conn = db()
     cur = conn.cursor()
     cur.execute(
@@ -837,22 +786,16 @@ async def rpend(interaction: discord.Interaction):
 # =========================
 # PREFIX COMMAND: !key
 # - !key -> show keyring embed
-# - !key +# "Reason" / !key -# "Reason" -> staff only, modifies own keys and posts:
-#    (1) plain text ledger entry (your format)
+# - !key +# "Reason" / !key -# "Reason" -> modifies own keys and posts:
+#    (1) plain text ledger entry
 #    (2) updated keyring embed
 # =========================
 @bot.command(name="key")
 async def key_cmd(ctx: commands.Context, amount: Optional[str] = None, *, reason: Optional[str] = None):
-    # Display: !key
     if amount is None:
         current, lifetime = keys_get(ctx.guild.id, ctx.author.id)
         embed = build_key_embed(ctx.author, current, lifetime)
         await ctx.send(embed=embed)
-        return
-
-    # Modify: staff only
-    if not ctx.author.guild_permissions.manage_guild:
-        await ctx.send("❌ Staff only (Manage Guild required) to modify keys.")
         return
 
     try:
@@ -874,7 +817,6 @@ async def key_cmd(ctx: commands.Context, amount: Optional[str] = None, *, reason
 
     current, lifetime = keys_get(ctx.guild.id, target.id)
 
-    # Ledger entry is plain text (not an embed), in your exact format
     reason_text = reason if reason else "*No reason provided.*"
     ledger_text = (
         f"Name: {target.mention}\n"
