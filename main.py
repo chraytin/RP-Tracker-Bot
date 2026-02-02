@@ -247,7 +247,7 @@ def build_key_embed(member: discord.Member, current: int, lifetime: int) -> disc
     if key_thumb:
         embed.set_thumbnail(url=key_thumb)
 
-    # CHANGE #2: Keyring footer should NOT include the 45-minute rewards clause
+    # Keyring footer should NOT include the 45-minute rewards clause
     return apply_theme(embed, footer_text_override="Stamped & filed by the Guild Registrar")
 
 # =========================
@@ -755,15 +755,16 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
         if cap:
             keys = hrs
             keys_add(guild_id, uid, keys)
-            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{keys}** 🗝️, **{gp}** gp")
+            # ✅ NEW: include hours rewarded
+            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp")
         else:
             xp = xp_per_hour_for_level(lvl) * hrs
-            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{xp}** xp, **{gp}** gp")
+            # ✅ NEW: include hours rewarded
+            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{xp}** xp, **{gp}** gp")
 
     if not lines:
         lines = ["*(no participants)*"]
 
-    # CHANGE #1: Links go at the bottom (Start/End)
     content = header + "\n".join(lines)
 
     rewards_msg = await interaction.followup.send(content, wait=True)
@@ -873,7 +874,7 @@ async def key_cmd(ctx: commands.Context, amount: Optional[str] = None, *, reason
 
     current, lifetime = keys_get(ctx.guild.id, target.id)
 
-    # CHANGE #3: Ledger entry is plain text (not an embed), in your exact format
+    # Ledger entry is plain text (not an embed), in your exact format
     reason_text = reason if reason else "*No reason provided.*"
     ledger_text = (
         f"Name: {target.mention}\n"
