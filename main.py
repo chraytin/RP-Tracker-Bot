@@ -1,10 +1,10 @@
 import os
 import time
-import sqlite3
 import asyncio
 import traceback
 from typing import Optional, List, Tuple
 
+import psycopg  # psycopg v3
 import discord
 from discord.ext import commands
 from aiohttp import web
@@ -16,80 +16,66 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN is not set. Add it in Railway → Variables.")
 
-DB_FILE = "rp_tracker.db"
 print("Booting RP Tracker...", flush=True)
 
 # =========================
-# DATABASE + SCHEMA
+# DATABASE (Postgres)
 # =========================
 def db():
-    return sqlite3.connect(DB_FILE)
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        raise RuntimeError(
+            "DATABASE_URL is not set. In Railway, add a Variable Reference from the Postgres service into the RP-Tracker-Bot service."
+        )
+    return psycopg.connect(database_url)
 
 def ensure_schema():
-    conn = db()
-    cur = conn.cursor()
+    with db() as conn:
+        with conn.cursor() as cur:
+            # NOTE: use BIGINT for Discord IDs; use DOUBLE PRECISION for timestamps/seconds
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS sessions (
+                    message_id BIGINT PRIMARY KEY,
+                    state INTEGER,
+                    started_at DOUBLE PRECISION,
+                    run_seconds DOUBLE PRECISION,
+                    channel_id BIGINT,
+                    guild_id BIGINT
+                )
+            """)
 
-    # sessions:
-    # state: 0=stopped, 1=running, 2=paused
-    # started_at: when running began (current segment)
-    # run_seconds: accumulated running time across start/pause/continue
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            message_id INTEGER PRIMARY KEY,
-            state INTEGER,
-            started_at REAL,
-            run_seconds REAL,
-            channel_id INTEGER,
-            guild_id INTEGER
-        )
-    """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS participants (
+                    message_id BIGINT,
+                    user_id BIGINT,
+                    character TEXT,
+                    level INTEGER,
+                    seconds DOUBLE PRECISION,
+                    last_tick DOUBLE PRECISION,
+                    capped INTEGER,
+                    PRIMARY KEY (message_id, user_id)
+                )
+            """)
 
-    # participants:
-    # seconds: total accrued time for this participant in this session
-    # last_tick: if not NULL, they are currently accruing time (personal timer running)
-    # capped: 0/1 (if 1, earn 🗝️ per hour instead of XP; GP still applies)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS participants (
-            message_id INTEGER,
-            user_id INTEGER,
-            character TEXT,
-            level INTEGER,
-            seconds REAL,
-            last_tick REAL,
-            capped INTEGER,
-            PRIMARY KEY (message_id, user_id)
-        )
-    """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS keys (
+                    guild_id BIGINT,
+                    user_id BIGINT,
+                    current INTEGER DEFAULT 0,
+                    lifetime INTEGER DEFAULT 0,
+                    PRIMARY KEY (guild_id, user_id)
+                )
+            """)
 
-    # keys ledger:
-    # current = spendable current keys
-    # lifetime = lifetime keys earned (never decreases)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS keys (
-            guild_id INTEGER,
-            user_id INTEGER,
-            current INTEGER DEFAULT 0,
-            lifetime INTEGER DEFAULT 0,
-            PRIMARY KEY (guild_id, user_id)
-        )
-    """)
+            # Safe migrations for existing tables in Postgres
+            cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS guild_id BIGINT")
+            cur.execute("ALTER TABLE participants ADD COLUMN IF NOT EXISTS capped INTEGER")
+            cur.execute("ALTER TABLE participants ADD COLUMN IF NOT EXISTS last_tick DOUBLE PRECISION")
 
-    # Migrations (safe add columns)
-    cur.execute("PRAGMA table_info(sessions)")
-    scols = {row[1] for row in cur.fetchall()}
-    if "guild_id" not in scols:
-        cur.execute("ALTER TABLE sessions ADD COLUMN guild_id INTEGER")
-
-    cur.execute("PRAGMA table_info(participants)")
-    pcols = {row[1] for row in cur.fetchall()}
-    if "capped" not in pcols:
-        cur.execute("ALTER TABLE participants ADD COLUMN capped INTEGER")
-        cur.execute("UPDATE participants SET capped = COALESCE(capped, 0)")
-    if "last_tick" not in pcols:
-        cur.execute("ALTER TABLE participants ADD COLUMN last_tick REAL")
-
-    conn.commit()
-    conn.close()
+            # Backfill defaults (safe)
+            cur.execute("UPDATE participants SET capped = COALESCE(capped, 0) WHERE capped IS NULL")
+            cur.execute("UPDATE participants SET seconds = COALESCE(seconds, 0) WHERE seconds IS NULL")
+            cur.execute("UPDATE participants SET run_seconds = COALESCE(run_seconds, 0) WHERE run_seconds IS NULL")
 
 ensure_schema()
 
@@ -161,9 +147,7 @@ def apply_theme(embed: discord.Embed, *, footer_text_override: Optional[str] = N
 # =========================
 intents = discord.Intents.default()
 intents.guilds = True
-
-# Required for prefix command !key (Message Content Intent must be enabled in Dev Portal)
-intents.message_content = True
+intents.message_content = True  # required for prefix command !key
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -192,11 +176,13 @@ async def start_web_server():
 # KEY LEDGER HELPERS
 # =========================
 def keys_get(guild_id: int, user_id: int) -> Tuple[int, int]:
-    conn = db()
-    cur = conn.cursor()
-    cur.execute("SELECT current, lifetime FROM keys WHERE guild_id=? AND user_id=?", (guild_id, user_id))
-    row = cur.fetchone()
-    conn.close()
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT current, lifetime FROM keys WHERE guild_id=%s AND user_id=%s",
+                (int(guild_id), int(user_id))
+            )
+            row = cur.fetchone()
     if not row:
         return (0, 0)
     return (int(row[0] or 0), int(row[1] or 0))
@@ -205,37 +191,36 @@ def keys_add(guild_id: int, user_id: int, amount: int):
     amount = int(amount)
     if amount <= 0:
         return
-    conn = db()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO keys (guild_id, user_id, current, lifetime)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(guild_id, user_id)
-        DO UPDATE SET
-            current = current + excluded.current,
-            lifetime = lifetime + excluded.lifetime
-    """, (guild_id, user_id, amount, amount))
-    conn.commit()
-    conn.close()
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO keys (guild_id, user_id, current, lifetime)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (guild_id, user_id)
+                DO UPDATE SET
+                    current = keys.current + EXCLUDED.current,
+                    lifetime = keys.lifetime + EXCLUDED.lifetime
+            """, (int(guild_id), int(user_id), amount, amount))
 
 def keys_sub(guild_id: int, user_id: int, amount: int):
     amount = int(amount)
     if amount <= 0:
         return
-    conn = db()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO keys (guild_id, user_id, current, lifetime)
-        VALUES (?, ?, 0, 0)
-        ON CONFLICT(guild_id, user_id) DO NOTHING
-    """, (guild_id, user_id))
-    cur.execute("""
-        UPDATE keys
-        SET current = CASE WHEN current - ? < 0 THEN 0 ELSE current - ? END
-        WHERE guild_id=? AND user_id=?
-    """, (amount, amount, guild_id, user_id))
-    conn.commit()
-    conn.close()
+    with db() as conn:
+        with conn.cursor() as cur:
+            # Ensure row exists
+            cur.execute("""
+                INSERT INTO keys (guild_id, user_id, current, lifetime)
+                VALUES (%s, %s, 0, 0)
+                ON CONFLICT (guild_id, user_id) DO NOTHING
+            """, (int(guild_id), int(user_id)))
+
+            # Subtract but don't go below 0
+            cur.execute("""
+                UPDATE keys
+                SET current = GREATEST(0, current - %s)
+                WHERE guild_id=%s AND user_id=%s
+            """, (amount, int(guild_id), int(user_id)))
 
 def build_key_embed(member: discord.Member, current: int, lifetime: int) -> discord.Embed:
     title = f"🗝️ {member.display_name}'s Keyring"
@@ -254,16 +239,17 @@ def build_key_embed(member: discord.Member, current: int, lifetime: int) -> disc
 # HELPERS (SESSIONS)
 # =========================
 def get_session(message_id: int) -> Tuple[int, Optional[float], float, Optional[int], Optional[int]]:
-    conn = db()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT state, started_at, COALESCE(run_seconds,0), channel_id, guild_id FROM sessions WHERE message_id=?",
-        (message_id,)
-    )
-    row = cur.fetchone()
-    conn.close()
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT state, started_at, COALESCE(run_seconds,0), channel_id, guild_id FROM sessions WHERE message_id=%s",
+                (int(message_id),)
+            )
+            row = cur.fetchone()
+
     if not row:
         return 0, None, 0.0, None, None
+
     state = int(row[0] or 0)
     started_at = float(row[1]) if row[1] is not None else None
     run_seconds = float(row[2] or 0.0)
@@ -272,17 +258,17 @@ def get_session(message_id: int) -> Tuple[int, Optional[float], float, Optional[
     return state, started_at, run_seconds, channel_id, guild_id
 
 def list_participants(message_id: int) -> List[Tuple[int, str, int, float, int]]:
-    conn = db()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT user_id, character, level, COALESCE(seconds, 0), COALESCE(capped, 0)
-        FROM participants
-        WHERE message_id=?
-        ORDER BY user_id
-    """, (message_id,))
-    rows = [(int(uid), str(ch), int(lvl), float(secs), int(cap)) for (uid, ch, lvl, secs, cap) in cur.fetchall()]
-    conn.close()
-    return rows
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT user_id, character, level, COALESCE(seconds, 0), COALESCE(capped, 0)
+                FROM participants
+                WHERE message_id=%s
+                ORDER BY user_id
+            """, (int(message_id),))
+            rows = cur.fetchall()
+
+    return [(int(uid), str(ch), int(lvl), float(secs), int(cap)) for (uid, ch, lvl, secs, cap) in rows]
 
 def session_elapsed_seconds(message_id: int) -> float:
     state, started_at, run_seconds, _, _ = get_session(message_id)
@@ -369,40 +355,36 @@ def tick_running_sessions():
     Only participants with last_tick NOT NULL accrue time.
     """
     now = time.time()
-    conn = db()
-    cur = conn.cursor()
 
-    cur.execute("SELECT message_id FROM sessions WHERE state=1")
-    running_ids = [int(r[0]) for r in cur.fetchall()]
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT message_id FROM sessions WHERE state=1")
+            running_ids = [int(r[0]) for r in cur.fetchall()]
 
-    for mid in running_ids:
-        cur.execute("""
-            SELECT user_id, last_tick, seconds
-            FROM participants
-            WHERE message_id=? AND last_tick IS NOT NULL
-        """, (mid,))
-        for uid, last_tick, secs in cur.fetchall():
-            delta = max(0.0, now - float(last_tick))
-            new_secs = float(secs or 0) + delta
-            cur.execute("""
-                UPDATE participants
-                SET seconds=?, last_tick=?
-                WHERE message_id=? AND user_id=?
-            """, (new_secs, now, mid, int(uid)))
-
-    conn.commit()
-    conn.close()
+            for mid in running_ids:
+                cur.execute("""
+                    SELECT user_id, last_tick, seconds
+                    FROM participants
+                    WHERE message_id=%s AND last_tick IS NOT NULL
+                """, (int(mid),))
+                for uid, last_tick, secs in cur.fetchall():
+                    delta = max(0.0, now - float(last_tick))
+                    new_secs = float(secs or 0) + delta
+                    cur.execute("""
+                        UPDATE participants
+                        SET seconds=%s, last_tick=%s
+                        WHERE message_id=%s AND user_id=%s
+                    """, (new_secs, now, int(mid), int(uid)))
 
 async def ticker_loop():
     while True:
         try:
             tick_running_sessions()
 
-            conn = db()
-            cur = conn.cursor()
-            cur.execute("SELECT message_id FROM sessions WHERE state IN (1,2)")
-            mids = [int(r[0]) for r in cur.fetchall()]
-            conn.close()
+            with db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT message_id FROM sessions WHERE state IN (1,2)")
+                    mids = [int(r[0]) for r in cur.fetchall()]
 
             for mid in mids:
                 await update_tracker_message(mid)
@@ -428,7 +410,7 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
 
     def __init__(self, message_id: int):
         super().__init__()
-        self.message_id = message_id
+        self.message_id = int(message_id)
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
@@ -436,10 +418,7 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
             if not (1 <= lvl <= 20):
                 raise ValueError
         except ValueError:
-            return await interaction.response.send_message(
-                "Level must be a number between 1 and 20.",
-                ephemeral=True,
-            )
+            return await interaction.response.send_message("Level must be a number between 1 and 20.", ephemeral=True)
 
         cname = str(self.name.value).strip()
         if not cname:
@@ -448,37 +427,43 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
         cap_raw = (str(self.capped.value).strip().lower() if self.capped.value else "no")
         is_capped = 1 if cap_raw in ("y", "yes", "true", "1", "cap", "capped") else 0
 
-        conn = db()
-        cur = conn.cursor()
+        with db() as conn:
+            with conn.cursor() as cur:
+                # Upsert participant, preserving existing seconds
+                cur.execute("""
+                    INSERT INTO participants (message_id, user_id, character, level, seconds, last_tick, capped)
+                    VALUES (
+                        %s, %s, %s, %s,
+                        COALESCE((SELECT seconds FROM participants WHERE message_id=%s AND user_id=%s), 0),
+                        NULL,
+                        %s
+                    )
+                    ON CONFLICT (message_id, user_id)
+                    DO UPDATE SET
+                        character = EXCLUDED.character,
+                        level = EXCLUDED.level,
+                        seconds = EXCLUDED.seconds,
+                        last_tick = NULL,
+                        capped = EXCLUDED.capped
+                """, (
+                    self.message_id,
+                    int(interaction.user.id),
+                    cname,
+                    lvl,
+                    self.message_id,
+                    int(interaction.user.id),
+                    is_capped
+                ))
 
-        # preserve accumulated seconds if editing
-        cur.execute("""
-            INSERT OR REPLACE INTO participants
-            (message_id, user_id, character, level, seconds, last_tick, capped)
-            VALUES (?, ?, ?, ?, COALESCE(
-                (SELECT seconds FROM participants WHERE message_id=? AND user_id=?), 0
-            ), NULL, ?)
-        """, (
-            self.message_id,
-            interaction.user.id,
-            cname,
-            lvl,
-            self.message_id,
-            interaction.user.id,
-            is_capped
-        ))
-
-        # if session is running, auto-start their personal timer
-        state, _, _, _, _ = get_session(self.message_id)
-        if state == 1:
-            now = time.time()
-            cur.execute("""
-                UPDATE participants SET last_tick=?
-                WHERE message_id=? AND user_id=?
-            """, (now, self.message_id, interaction.user.id))
-
-        conn.commit()
-        conn.close()
+                # if session is running, auto-start their personal timer
+                state, _, _, _, _ = get_session(self.message_id)
+                if state == 1:
+                    now = time.time()
+                    cur.execute("""
+                        UPDATE participants
+                        SET last_tick=%s
+                        WHERE message_id=%s AND user_id=%s
+                    """, (now, self.message_id, int(interaction.user.id)))
 
         cap_txt = " *(Capped: 🗝️/hr)*" if is_capped else ""
         await interaction.response.send_message(
@@ -493,40 +478,40 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
 class RPView(discord.ui.View):
     def __init__(self, message_id: int):
         super().__init__(timeout=None)
-        self.message_id = message_id
+        self.message_id = int(message_id)
 
         # Row 0: player actions
         self.join_btn = discord.ui.Button(
             label="✅ Join", style=discord.ButtonStyle.success,
-            custom_id=f"rp_join:{message_id}", row=0
+            custom_id=f"rp_join:{self.message_id}", row=0
         )
         self.leave_btn = discord.ui.Button(
             label="⏹ Leave", style=discord.ButtonStyle.secondary,
-            custom_id=f"rp_leave:{message_id}", row=0
+            custom_id=f"rp_leave:{self.message_id}", row=0
         )
         self.rejoin_btn = discord.ui.Button(
             label="🔁 Rejoin", style=discord.ButtonStyle.secondary,
-            custom_id=f"rp_rejoin:{message_id}", row=0
+            custom_id=f"rp_rejoin:{self.message_id}", row=0
         )
 
         # Row 1: actions
         self.start_btn = discord.ui.Button(
             label="▶️ Start", style=discord.ButtonStyle.primary,
-            custom_id=f"rp_start:{message_id}", row=1
+            custom_id=f"rp_start:{self.message_id}", row=1
         )
         self.pause_btn = discord.ui.Button(
             label="⏸ Pause", style=discord.ButtonStyle.secondary,
-            custom_id=f"rp_pause:{message_id}", row=1
+            custom_id=f"rp_pause:{self.message_id}", row=1
         )
         self.resume_btn = discord.ui.Button(
             label="⏵ Resume", style=discord.ButtonStyle.success,
-            custom_id=f"rp_resume:{message_id}", row=1
+            custom_id=f"rp_resume:{self.message_id}", row=1
         )
 
         # Row 2: end
         self.end_btn = discord.ui.Button(
             label="🏁 End", style=discord.ButtonStyle.danger,
-            custom_id=f"rp_end:{message_id}", row=2
+            custom_id=f"rp_end:{self.message_id}", row=2
         )
 
         self.join_btn.callback = self.join_cb
@@ -551,32 +536,29 @@ class RPView(discord.ui.View):
     async def leave_cb(self, interaction: discord.Interaction):
         """Stop time tracking ONLY for the clicker."""
         now = time.time()
-        conn = db()
-        cur = conn.cursor()
 
-        cur.execute("""
-            SELECT last_tick, seconds FROM participants
-            WHERE message_id=? AND user_id=?
-        """, (self.message_id, interaction.user.id))
-        row = cur.fetchone()
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT last_tick, seconds
+                    FROM participants
+                    WHERE message_id=%s AND user_id=%s
+                """, (self.message_id, int(interaction.user.id)))
+                row = cur.fetchone()
 
-        if not row:
-            conn.close()
-            await interaction.response.send_message("You haven’t joined this RP yet.", ephemeral=True)
-            return
+                if not row:
+                    await interaction.response.send_message("You haven’t joined this RP yet.", ephemeral=True)
+                    return
 
-        last_tick, secs = row[0], float(row[1] or 0.0)
-        if last_tick is not None:
-            secs += max(0.0, now - float(last_tick))
+                last_tick, secs = row[0], float(row[1] or 0.0)
+                if last_tick is not None:
+                    secs += max(0.0, now - float(last_tick))
 
-        cur.execute("""
-            UPDATE participants
-            SET seconds=?, last_tick=NULL
-            WHERE message_id=? AND user_id=?
-        """, (secs, self.message_id, interaction.user.id))
-
-        conn.commit()
-        conn.close()
+                cur.execute("""
+                    UPDATE participants
+                    SET seconds=%s, last_tick=NULL
+                    WHERE message_id=%s AND user_id=%s
+                """, (secs, self.message_id, int(interaction.user.id)))
 
         await interaction.response.send_message("⏹ You’ve left (timer paused for you only).", ephemeral=True)
         await update_tracker_message(self.message_id)
@@ -585,32 +567,36 @@ class RPView(discord.ui.View):
         """Restart time tracking ONLY for the clicker if session is running."""
         state, _, _, _, _ = get_session(self.message_id)
 
-        conn = db()
-        cur = conn.cursor()
-        cur.execute("SELECT 1 FROM participants WHERE message_id=? AND user_id=?",
-                    (self.message_id, interaction.user.id))
-        exists = cur.fetchone() is not None
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT 1 FROM participants
+                    WHERE message_id=%s AND user_id=%s
+                """, (self.message_id, int(interaction.user.id)))
+                exists = cur.fetchone() is not None
 
-        if not exists:
-            conn.close()
-            await interaction.response.send_message("You haven’t joined yet. Click **✅ Join** first.", ephemeral=True)
-            return
+                if not exists:
+                    await interaction.response.send_message("You haven’t joined yet. Click **✅ Join** first.", ephemeral=True)
+                    return
 
-        if state != 1:
-            cur.execute("UPDATE participants SET last_tick=NULL WHERE message_id=? AND user_id=?",
-                        (self.message_id, interaction.user.id))
-            conn.commit()
-            conn.close()
-            await interaction.response.send_message("You’re marked present, but the session isn’t running.", ephemeral=True)
-            await update_tracker_message(self.message_id)
-            return
+                if state != 1:
+                    cur.execute("""
+                        UPDATE participants SET last_tick=NULL
+                        WHERE message_id=%s AND user_id=%s
+                    """, (self.message_id, int(interaction.user.id)))
+                    await interaction.response.send_message(
+                        "You’re marked present, but the session isn’t running.",
+                        ephemeral=True
+                    )
+                    await update_tracker_message(self.message_id)
+                    return
 
-        now = time.time()
-        cur.execute("UPDATE participants SET last_tick=? WHERE message_id=? AND user_id=?",
-                    (now, self.message_id, interaction.user.id))
-
-        conn.commit()
-        conn.close()
+                now = time.time()
+                cur.execute("""
+                    UPDATE participants
+                    SET last_tick=%s
+                    WHERE message_id=%s AND user_id=%s
+                """, (now, self.message_id, int(interaction.user.id)))
 
         await interaction.response.send_message("🔁 You’re back in. Your timer is running again.", ephemeral=True)
         await update_tracker_message(self.message_id)
@@ -622,24 +608,27 @@ class RPView(discord.ui.View):
             return
 
         now = time.time()
-        conn = db()
-        cur = conn.cursor()
 
-        cur.execute(
-            "INSERT OR IGNORE INTO sessions (message_id, state, started_at, run_seconds, channel_id, guild_id) VALUES (?, 0, NULL, 0, ?, ?)",
-            (self.message_id, interaction.channel_id, interaction.guild_id)
-        )
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO sessions (message_id, state, started_at, run_seconds, channel_id, guild_id)
+                    VALUES (%s, 0, NULL, 0, %s, %s)
+                    ON CONFLICT (message_id) DO NOTHING
+                """, (self.message_id, int(interaction.channel_id), int(interaction.guild_id)))
 
-        cur.execute(
-            "UPDATE sessions SET state=1, started_at=?, channel_id=?, guild_id=?, run_seconds=? WHERE message_id=?",
-            (now, interaction.channel_id, interaction.guild_id, float(run_seconds or 0.0), self.message_id)
-        )
+                cur.execute("""
+                    UPDATE sessions
+                    SET state=1, started_at=%s, channel_id=%s, guild_id=%s, run_seconds=%s
+                    WHERE message_id=%s
+                """, (now, int(interaction.channel_id), int(interaction.guild_id), float(run_seconds or 0.0), self.message_id))
 
-        # start accruing for everyone currently participating
-        cur.execute("UPDATE participants SET last_tick=? WHERE message_id=?", (now, self.message_id))
-
-        conn.commit()
-        conn.close()
+                # start accruing for everyone currently participating
+                cur.execute("""
+                    UPDATE participants
+                    SET last_tick=%s
+                    WHERE message_id=%s
+                """, (now, self.message_id))
 
         await interaction.response.send_message("▶️ Session started. The guild clock is running.", ephemeral=True)
         await update_tracker_message(self.message_id)
@@ -655,13 +644,18 @@ class RPView(discord.ui.View):
         now = time.time()
         new_run = float(run_seconds or 0.0) + max(0.0, now - started_at)
 
-        conn = db()
-        cur = conn.cursor()
-        cur.execute("UPDATE sessions SET state=2, started_at=NULL, run_seconds=? WHERE message_id=?",
-                    (new_run, self.message_id))
-        cur.execute("UPDATE participants SET last_tick=NULL WHERE message_id=?", (self.message_id,))
-        conn.commit()
-        conn.close()
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE sessions
+                    SET state=2, started_at=NULL, run_seconds=%s
+                    WHERE message_id=%s
+                """, (new_run, self.message_id))
+                cur.execute("""
+                    UPDATE participants
+                    SET last_tick=NULL
+                    WHERE message_id=%s
+                """, (self.message_id,))
 
         await interaction.response.send_message("⏸ Session paused. Quills down.", ephemeral=True)
         await update_tracker_message(self.message_id)
@@ -673,17 +667,21 @@ class RPView(discord.ui.View):
             return
 
         now = time.time()
-        conn = db()
-        cur = conn.cursor()
-        cur.execute(
-            "UPDATE sessions SET state=1, started_at=?, run_seconds=? WHERE message_id=?",
-            (now, float(run_seconds or 0.0), self.message_id)
-        )
-        # resume for everyone; individual players can opt out via Leave
-        cur.execute("UPDATE participants SET last_tick=? WHERE message_id=?", (now, self.message_id))
 
-        conn.commit()
-        conn.close()
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE sessions
+                    SET state=1, started_at=%s, run_seconds=%s
+                    WHERE message_id=%s
+                """, (now, float(run_seconds or 0.0), self.message_id))
+
+                # resume for everyone; individual players can opt out via Leave
+                cur.execute("""
+                    UPDATE participants
+                    SET last_tick=%s
+                    WHERE message_id=%s
+                """, (now, self.message_id))
 
         await interaction.response.send_message("⏵ Session resumed. The guild clock continues.", ephemeral=True)
         await update_tracker_message(self.message_id)
@@ -715,15 +713,18 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
         run_seconds = float(run_seconds or 0.0) + max(0.0, now - started_at)
 
     # Stop session + stop all personal timers
-    conn = db()
-    cur = conn.cursor()
-    cur.execute(
-        "UPDATE sessions SET state=0, started_at=NULL, run_seconds=? WHERE message_id=?",
-        (float(run_seconds or 0.0), message_id)
-    )
-    cur.execute("UPDATE participants SET last_tick=NULL WHERE message_id=?", (message_id,))
-    conn.commit()
-    conn.close()
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE sessions
+                SET state=0, started_at=NULL, run_seconds=%s
+                WHERE message_id=%s
+            """, (float(run_seconds or 0.0), int(message_id)))
+            cur.execute("""
+                UPDATE participants
+                SET last_tick=NULL
+                WHERE message_id=%s
+            """, (int(message_id),))
 
     parts = list_participants(message_id)
     start_link = tracker_url(guild_id, channel_id, message_id)
@@ -738,14 +739,10 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
         if cap:
             keys = hrs
             keys_add(guild_id, uid, keys)
-            lines.append(
-                f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp"
-            )
+            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp")
         else:
             xp = xp_per_hour_for_level(lvl) * hrs
-            lines.append(
-                f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{xp}** xp, **{gp}** gp"
-            )
+            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{xp}** xp, **{gp}** gp")
 
     if not lines:
         lines = ["*(no participants)*"]
@@ -775,17 +772,19 @@ async def rpbegin(interaction: discord.Interaction):
     ))
     msg = await interaction.followup.send(embed=temp, wait=True)
 
-    # Store session
-    conn = db()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT OR IGNORE INTO sessions (message_id, state, started_at, run_seconds, channel_id, guild_id) VALUES (?, 0, NULL, 0, ?, ?)",
-        (msg.id, msg.channel.id, interaction.guild_id)
-    )
-    cur.execute("UPDATE sessions SET channel_id=?, guild_id=? WHERE message_id=?",
-                (msg.channel.id, interaction.guild_id, msg.id))
-    conn.commit()
-    conn.close()
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO sessions (message_id, state, started_at, run_seconds, channel_id, guild_id)
+                VALUES (%s, 0, NULL, 0, %s, %s)
+                ON CONFLICT (message_id) DO NOTHING
+            """, (int(msg.id), int(msg.channel.id), int(interaction.guild_id)))
+
+            cur.execute("""
+                UPDATE sessions
+                SET channel_id=%s, guild_id=%s
+                WHERE message_id=%s
+            """, (int(msg.channel.id), int(interaction.guild_id), int(msg.id)))
 
     view = RPView(msg.id)
     await msg.edit(embed=build_embed(msg.id), view=view)
@@ -800,17 +799,16 @@ async def rpbegin(interaction: discord.Interaction):
 async def rpend(interaction: discord.Interaction):
     await interaction.response.defer(thinking=False)
 
-    conn = db()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT message_id
-        FROM sessions
-        WHERE channel_id=? AND guild_id=? AND state IN (1,2)
-        ORDER BY message_id DESC
-        LIMIT 1
-    """, (interaction.channel_id, interaction.guild_id))
-    row = cur.fetchone()
-    conn.close()
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT message_id
+                FROM sessions
+                WHERE channel_id=%s AND guild_id=%s AND state IN (1,2)
+                ORDER BY message_id DESC
+                LIMIT 1
+            """, (int(interaction.channel_id), int(interaction.guild_id)))
+            row = cur.fetchone()
 
     if not row:
         await interaction.followup.send("❌ No active tracker found in this channel.", ephemeral=True)
@@ -891,11 +889,11 @@ async def on_app_command_error(interaction: discord.Interaction, error: Exceptio
 # =========================
 @bot.event
 async def on_ready():
-    conn = db()
-    cur = conn.cursor()
-    cur.execute("SELECT message_id FROM sessions")
-    msg_ids = [int(r[0]) for r in cur.fetchall()]
-    conn.close()
+    # Re-register views for existing tracker messages
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT message_id FROM sessions")
+            msg_ids = [int(r[0]) for r in cur.fetchall()]
 
     for mid in msg_ids:
         bot.add_view(RPView(mid))
