@@ -1,8 +1,11 @@
 import os
 import time
+import csv
+import shlex
+import random
 import asyncio
 import traceback
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict
 
 import psycopg
 import discord
@@ -18,13 +21,151 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN is not set. Add it in Railway → Variables.")
 
+
 def db():
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
         raise RuntimeError(
             "DATABASE_URL is not set. In Railway, add a Variable Reference from the Postgres service into the RP-Tracker-Bot service."
         )
+    # NOTE: Railway's DATABASE_URL is usually compatible with psycopg directly.
     return psycopg.connect(database_url)
+
+
+# =========================
+# QUEST REWARD TABLE
+# =========================
+# Level: (xp_min, xp_max, gp_min, gp_max)
+QUEST_REWARDS: Dict[int, Tuple[int, int, int, int]] = {
+    2:  (200, 600, 50, 200),
+    3:  (400, 800, 50, 200),
+    4:  (600, 1200, 50, 200),
+    5:  (800, 1400, 200, 400),
+    6:  (1000, 1800, 200, 400),
+    7:  (1200, 2000, 200, 400),
+    8:  (1400, 2200, 200, 400),
+    9:  (1600, 2400, 800, 1200),
+    10: (1800, 2600, 800, 1200),
+    11: (2000, 2800, 800, 1200),
+    12: (2200, 3000, 800, 1200),
+    13: (2400, 3200, 1500, 2000),
+    14: (2600, 3400, 1500, 2000),
+    15: (2800, 3600, 1500, 2000),
+    16: (3000, 3800, 1500, 2000),
+    17: (3200, 4000, 2000, 3000),
+    18: (3400, 4200, 2000, 3000),
+    19: (3600, 4400, 2000, 3000),
+    # 20 is special: 20 keys, gp 3000-4000
+}
+
+
+def loot_rarity_for_level(level: int) -> str:
+    if 2 <= level <= 4:
+        return "Common"
+    if 5 <= level <= 8:
+        return "Uncommon"
+    if 9 <= level <= 12:
+        return "Rare"
+    if 13 <= level <= 16:
+        return "Very Rare"
+    return "Legendary"
+
+
+RARITY_ORDER = ["Common", "Uncommon", "Rare", "Very Rare", "Legendary"]
+
+
+def rarity_shift(rarity: str, shift: int) -> str:
+    """shift: -1 down, +1 up"""
+    try:
+        idx = RARITY_ORDER.index(rarity)
+    except ValueError:
+        return rarity
+    idx = max(0, min(len(RARITY_ORDER) - 1, idx + shift))
+    return RARITY_ORDER[idx]
+
+
+# =========================
+# LOOT LIST LOADER (CSV)
+# =========================
+LOOT_FILES = {
+    "Common": "Guild Loot List - Common.csv",
+    "Uncommon": "Guild Loot List - Uncommon.csv",
+    "Rare": "Guild Loot List - Rare.csv",
+    "Very Rare": "Guild Loot List - Very Rare.csv",
+    "Legendary": "Guild Loot List - Legendary.csv",
+}
+
+LOOT: Dict[str, List[str]] = {k: [] for k in LOOT_FILES.keys()}
+
+
+def _load_csv_items(path: str) -> List[str]:
+    items: List[str] = []
+    if not os.path.exists(path):
+        return items
+
+    with open(path, "r", encoding="utf-8", newline="") as f:
+        # Try DictReader first
+        sample = f.read(2048)
+        f.seek(0)
+        try:
+            dialect = csv.Sniffer().sniff(sample)
+        except Exception:
+            dialect = csv.excel
+
+        reader = csv.reader(f, dialect)
+        rows = list(reader)
+
+    if not rows:
+        return items
+
+    # If there's a header row, try to find a reasonable column
+    header = [c.strip() for c in rows[0]]
+    data_rows = rows[1:]
+
+    # Heuristic: pick first non-empty column that isn't obviously "rarity" etc
+    col_idx = 0
+    header_lower = [h.lower() for h in header]
+    for i, h in enumerate(header_lower):
+        if "item" in h or "name" in h:
+            col_idx = i
+            break
+
+    # If no header-looking row, treat all rows as data (no header)
+    header_looks_like_header = any(("item" in h.lower() or "name" in h.lower() or "rarity" in h.lower()) for h in header)
+    if not header_looks_like_header:
+        data_rows = rows
+        col_idx = 0
+
+    for r in data_rows:
+        if not r:
+            continue
+        if col_idx >= len(r):
+            continue
+        val = str(r[col_idx]).strip()
+        if val:
+            items.append(val)
+
+    # De-dupe while preserving order
+    seen = set()
+    uniq = []
+    for it in items:
+        if it not in seen:
+            uniq.append(it)
+            seen.add(it)
+    return uniq
+
+
+def load_loot_lists():
+    for rarity, filename in LOOT_FILES.items():
+        LOOT[rarity] = _load_csv_items(filename)
+    print(
+        "Loot loaded:",
+        {k: len(v) for k, v in LOOT.items()},
+        flush=True
+    )
+
+
+load_loot_lists()
 
 # =========================
 # DATABASE + SCHEMA (Postgres)
@@ -84,10 +225,11 @@ def ensure_schema():
             cur.execute("UPDATE participants SET xp_dip = COALESCE(xp_dip, 0) WHERE xp_dip IS NULL")
             cur.execute("UPDATE participants SET gp_dip = COALESCE(gp_dip, 0) WHERE gp_dip IS NULL")
 
+
 ensure_schema()
 
 # =========================
-# REWARD RULES
+# REWARD RULES (RP SESSION)
 # =========================
 def reward_hours(seconds: float) -> int:
     """
@@ -95,6 +237,7 @@ def reward_hours(seconds: float) -> int:
     0h until 00:45:00, 1h at 00:45, 2h at 01:45, etc.
     """
     return int((max(0.0, seconds) + 900) // 3600)
+
 
 def xp_per_hour_for_level(level: int) -> int:
     if 2 <= level <= 4:
@@ -109,8 +252,10 @@ def xp_per_hour_for_level(level: int) -> int:
         return 1200
     return 0
 
+
 def gp_per_hour_for_level(level: int) -> int:
     return max(0, int(level)) * 10
+
 
 # =========================
 # THEME
@@ -121,6 +266,7 @@ def theme_color() -> discord.Color:
         return discord.Color(int(raw, 16))
     except Exception:
         return discord.Color.gold()
+
 
 def apply_theme(embed: discord.Embed, *, footer_text_override: Optional[str] = None) -> discord.Embed:
     embed.color = theme_color()
@@ -149,12 +295,13 @@ def apply_theme(embed: discord.Embed, *, footer_text_override: Optional[str] = N
 
     return embed
 
+
 # =========================
 # BOT SETUP
 # =========================
 intents = discord.Intents.default()
 intents.guilds = True
-intents.message_content = True  # for !key
+intents.message_content = True  # for !key and !qrecords
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # =========================
@@ -163,8 +310,10 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def handle_root(_: web.Request) -> web.Response:
     return web.Response(text="RP Tracker is running.")
 
+
 async def handle_health(_: web.Request) -> web.Response:
     return web.Response(text="ok")
+
 
 async def start_web_server():
     port = int(os.getenv("PORT", "8080"))
@@ -190,6 +339,7 @@ def keys_get(guild_id: int, user_id: int) -> Tuple[int, int]:
         return (0, 0)
     return (int(row[0] or 0), int(row[1] or 0))
 
+
 def keys_add(guild_id: int, user_id: int, amount: int):
     amount = int(amount)
     if amount <= 0:
@@ -204,6 +354,7 @@ def keys_add(guild_id: int, user_id: int, amount: int):
                     current = keys.current + EXCLUDED.current,
                     lifetime = keys.lifetime + EXCLUDED.lifetime
             """, (guild_id, user_id, amount, amount))
+
 
 def keys_sub(guild_id: int, user_id: int, amount: int):
     amount = int(amount)
@@ -221,6 +372,7 @@ def keys_sub(guild_id: int, user_id: int, amount: int):
                 SET current = GREATEST(current - %s, 0)
                 WHERE guild_id=%s AND user_id=%s
             """, (amount, guild_id, user_id))
+
 
 def build_key_embed(member: discord.Member, current: int, lifetime: int) -> discord.Embed:
     title = f"🗝️ {member.display_name}'s Keyring"
@@ -256,6 +408,7 @@ def get_session(message_id: int) -> Tuple[int, Optional[float], float, Optional[
     guild_id = int(row[4]) if row[4] is not None else None
     return state, started_at, run_seconds, channel_id, guild_id
 
+
 def list_participants(message_id: int) -> List[Tuple[int, str, int, float, int, int, int]]:
     """
     Returns:
@@ -272,7 +425,11 @@ def list_participants(message_id: int) -> List[Tuple[int, str, int, float, int, 
             """, (message_id,))
             rows = cur.fetchall()
 
-    return [(int(uid), str(ch), int(lvl), float(secs), int(cap), int(xd), int(gd)) for (uid, ch, lvl, secs, cap, xd, gd) in rows]
+    return [
+        (int(uid), str(ch), int(lvl), float(secs), int(cap), int(xd), int(gd))
+        for (uid, ch, lvl, secs, cap, xd, gd) in rows
+    ]
+
 
 def session_elapsed_seconds(message_id: int) -> float:
     state, started_at, run_seconds, _, _ = get_session(message_id)
@@ -280,11 +437,13 @@ def session_elapsed_seconds(message_id: int) -> float:
         return run_seconds + max(0.0, time.time() - started_at)
     return run_seconds
 
+
 def fmt_hm(seconds: float) -> str:
     seconds = max(0.0, seconds)
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     return f"{h}h {m}m"
+
 
 def state_label(state: int) -> str:
     if state == 1:
@@ -293,8 +452,10 @@ def state_label(state: int) -> str:
         return "🟡 Paused"
     return "⚪ Not Started"
 
+
 def tracker_url(guild_id: int, channel_id: int, message_id: int) -> str:
     return f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}"
+
 
 def build_embed(message_id: int) -> discord.Embed:
     state, _, _, _, _ = get_session(message_id)
@@ -335,6 +496,7 @@ def build_embed(message_id: int) -> discord.Embed:
     )
 
     return apply_theme(embed)
+
 
 async def update_tracker_message(message_id: int):
     _, _, _, channel_id, _ = get_session(message_id)
@@ -388,6 +550,7 @@ def tick_running_sessions():
                         WHERE message_id=%s AND user_id=%s
                     """, (new_secs, now, mid, int(uid)))
 
+
 async def ticker_loop():
     while True:
         try:
@@ -415,7 +578,7 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
     level = discord.ui.TextInput(label="Level (1-20)", max_length=3)
     capped = discord.ui.TextInput(label="Capped? (yes/no)", required=False, max_length=5, placeholder="no")
 
-    # NEW: DIPs
+    # DIPs
     xp_dip = discord.ui.TextInput(label="XP DIP? (yes/no)", required=False, max_length=5, placeholder="no")
     gp_dip = discord.ui.TextInput(label="GP DIP? (yes/no)", required=False, max_length=5, placeholder="no")
 
@@ -733,6 +896,181 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
     await update_tracker_message(message_id)
 
 # =========================
+# QUEST RECORDS COMMAND
+# =========================
+def quest_reward_for(level: int, xp_mode: str, gp_mode: str) -> Tuple[str, int, int]:
+    """
+    Returns (xp_or_keys_label, xp_or_keys_amount, gp_amount)
+    - For level 20: label is "keys", amount is 20 (fixed)
+    """
+    lvl = int(level)
+    xp_mode = xp_mode.strip().lower()
+    gp_mode = gp_mode.strip().lower()
+
+    if lvl == 20:
+        # fixed keys + gp range
+        gp_min, gp_max = 3000, 4000
+        gp = gp_max if gp_mode == "gp-max" else gp_min
+        return ("keys", 20, gp)
+
+    if lvl < 2 or lvl > 19:
+        return ("xp", 0, 0)
+
+    xp_min, xp_max, gp_min, gp_max = QUEST_REWARDS.get(lvl, (0, 0, 0, 0))
+    xp = xp_max if xp_mode == "xp-max" else xp_min
+    gp = gp_max if gp_mode == "gp-max" else gp_min
+    return ("xp", xp, gp)
+
+
+def roll_loot_for_level(level: int) -> Tuple[Optional[str], Optional[int], str]:
+    """
+    Returns (item_name_or_none, steve_roll_or_none, rarity_used)
+    d100:
+      1 -> rarity below
+      100 -> rarity above
+      else -> assigned
+    """
+    lvl = int(level)
+    base = loot_rarity_for_level(lvl)
+    die = random.randint(1, 100)
+
+    shift = 0
+    if die == 1:
+        shift = -1
+    elif die == 100:
+        shift = 1
+
+    used = rarity_shift(base, shift)
+    pool = LOOT.get(used, [])
+    if not pool:
+        return (f"*No loot items loaded for {used}.*", die, used)
+
+    item = random.choice(pool)
+    return (item, die, used)
+
+
+@bot.command(name="qrecords", aliases=["Iqrecords"])
+async def qrecords_cmd(ctx: commands.Context, *, raw: str):
+    """
+    Usage:
+      !qrecords "Quest Name" "Quest Description"
+               "Difficulty" xp-max|xp-min gp-max|gp-min loot|none
+               @player1 "Char Name" 10 @player2 "Char Name" 11 ...
+
+    Notes:
+      - Char names with spaces MUST be quoted.
+      - If loot is 'loot', each player gets a d100 roll and a random item.
+      - Level 20 gets: 20 keys + gp min/max from the table.
+      - DM gets 10 keys (awarded to whoever runs the command).
+    """
+    try:
+        parts = shlex.split(raw)
+    except Exception:
+        await ctx.send("❌ Could not parse command. Make sure quotes are balanced.")
+        return
+
+    if len(parts) < 6:
+        await ctx.send(
+            '❌ Usage: `!qrecords "Quest Name" "Quest Description" "Difficulty" xp-max|xp-min gp-max|gp-min loot|none @player "Char" lvl ...`'
+        )
+        return
+
+    quest_name = parts[0]
+    quest_desc = parts[1]
+    difficulty = parts[2]
+    xp_mode = parts[3].lower()
+    gp_mode = parts[4].lower()
+    loot_flag = parts[5].lower()
+
+    if xp_mode not in ("xp-max", "xp-min"):
+        await ctx.send('❌ xp must be `xp-max` or `xp-min`.')
+        return
+    if gp_mode not in ("gp-max", "gp-min"):
+        await ctx.send('❌ gp must be `gp-max` or `gp-min`.')
+        return
+    if loot_flag not in ("loot", "none"):
+        await ctx.send('❌ loot must be `loot` or `none`.')
+        return
+
+    # parse players
+    tail = parts[6:]
+    if not tail:
+        await ctx.send("❌ You must include at least one player entry.")
+        return
+
+    entries = []
+    i = 0
+    while i < len(tail):
+        token = tail[i]
+
+        # Expect a mention or user id-ish token (we'll try converter)
+        # Best practice: actual mention <@123>
+        try:
+            member = await commands.MemberConverter().convert(ctx, token)
+        except Exception:
+            await ctx.send(f'❌ Could not read player at `{token}`. Use a proper mention like @User.')
+            return
+
+        if i + 2 >= len(tail):
+            await ctx.send('❌ Each player needs: `@player "Char Name" level`')
+            return
+
+        char_name = tail[i + 1]
+        try:
+            lvl = int(tail[i + 2])
+        except Exception:
+            await ctx.send(f'❌ Level must be a number (got `{tail[i+2]}` for {member.mention}).')
+            return
+
+        entries.append((member, char_name, lvl))
+        i += 3
+
+    # Build output
+    out_lines = []
+    out_lines.append(f"Quest Name: {quest_name}")
+    out_lines.append(f"Quest Description: {quest_desc}")
+    out_lines.append(f"Quest Difficulty: {difficulty}")
+
+    for member, char_name, lvl in entries:
+        label, xp_or_keys, gp = quest_reward_for(lvl, xp_mode, gp_mode)
+
+        loot_text = ""
+        if loot_flag == "loot":
+            item, steve_roll, used_rarity = roll_loot_for_level(lvl)
+            # Keep it simple like your sample
+            loot_text = f", {item}, (Steve rolled: {steve_roll})"
+
+        if label == "keys":
+            # level 20
+            out_lines.append(f"{member.mention} - {char_name} {lvl} - {xp_or_keys} 🗝️, {gp} gp{loot_text}")
+        else:
+            out_lines.append(f"{member.mention} - {char_name} {lvl} - {xp_or_keys} xp, {gp} gp{loot_text}")
+
+    # DM reward: 10 keys
+    dm_keys = 10
+    keys_add(ctx.guild.id, ctx.author.id, dm_keys)
+    out_lines.append(f"DM {dm_keys} 🗝️")
+
+    # Send (Discord message limit safety)
+    msg = "\n".join(out_lines)
+    if len(msg) <= 1900:
+        await ctx.send(msg)
+    else:
+        # chunk
+        chunk = []
+        size = 0
+        for line in out_lines:
+            if size + len(line) + 1 > 1900:
+                await ctx.send("\n".join(chunk))
+                chunk = [line]
+                size = len(line) + 1
+            else:
+                chunk.append(line)
+                size += len(line) + 1
+        if chunk:
+            await ctx.send("\n".join(chunk))
+
+# =========================
 # SLASH COMMANDS
 # =========================
 @bot.tree.command(name="rpbegin", description="Post and pin the Adventurer’s Guild RP tracker.")
@@ -763,6 +1101,7 @@ async def rpbegin(interaction: discord.Interaction):
         await msg.pin(reason="Adventurer’s Guild RP Tracker")
     except Exception:
         pass
+
 
 @bot.tree.command(name="rpend", description="End the active RP session in this channel/thread.")
 async def rpend(interaction: discord.Interaction):
