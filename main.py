@@ -969,11 +969,11 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
             xp_keys = None
 
         loot_txt = "none"
-        steve_roll: Optional[int] = None
+        loot_roll: Optional[int] = None
         if do_loot:
-            steve_roll = random.randint(1, 100)
+            loot_roll = random.randint(1, 100)
             base = rarity_for_level(lvl)
-            final_rarity = rarity_shift(base, steve_roll)
+            final_rarity = rarity_shift(base, loot_roll)
             item = random_loot(final_rarity)
             loot_txt = item if item else f"(No items loaded for {final_rarity})"
 
@@ -984,7 +984,7 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
             reward_str = f"{xp} xp, {gp} gp"
 
         if do_loot:
-            lines.append(f"{mention_out} - {char} {lvl} - {reward_str}, {loot_txt}, (Steve rolled: {steve_roll})")
+            lines.append(f"{mention_out} - {char} {lvl} - {reward_str}, {loot_txt}, (Grandmaster rolled: {loot_roll})")
         else:
             lines.append(f"{mention_out} - {char} {lvl} - {reward_str}, none")
 
