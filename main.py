@@ -883,7 +883,7 @@ async def key_cmd(ctx: commands.Context, amount: Optional[str] = None, *, reason
     await ctx.send(embed=build_key_embed(ctx.author, current, lifetime))
 
 # =========================
-# QUEST RECORDS: !qrecords
+# QUEST RECORDS: !qrecords (Fix A: don't lookup members; just mention by ID)
 # =========================
 def parse_user_id(token: str) -> Optional[int]:
     t = token.strip()
@@ -902,13 +902,11 @@ def quest_pick(level: int, mode: str) -> Tuple[Optional[int], Optional[int], Opt
     """
     lvl = int(level)
     if lvl == 20:
-        # XP is "20 keys" for level 20 per your table
         return (None, None, 20)
 
     xp_min, xp_max = QUEST_XP.get(lvl, (0, 0))
     gp_min, gp_max = QUEST_GP.get(lvl, (0, 0))
-
-    return ( (xp_max if mode == "max" else xp_min), (gp_max if mode == "max" else gp_min), None )
+    return ((xp_max if mode == "max" else xp_min), (gp_max if mode == "max" else gp_min), None)
 
 @bot.command(name="qrecords")
 async def qrecords_cmd(ctx: commands.Context, *, args: str):
@@ -916,9 +914,6 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
     Usage:
     !qrecords "Quest Name" "Quest Description" "Difficulty" "xp-min/xp-max" "gp-min/gp-max" "loot/none"
              @player1 char1 lvl1 @player2 char2 lvl2 ...
-
-    Example:
-    !qrecords "The Backstage Door Should Never Open" "desc..." "Deadly" "xp-max" "gp-min" "loot" @Jay Mal 10 @Bob Zoe 11
     """
     try:
         parts = shlex.split(args)
@@ -944,21 +939,20 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
     lines: List[str] = []
     for i in range(0, len(rest), 3):
         user_tok, char, lvl_tok = rest[i:i+3]
+
         uid = parse_user_id(user_tok)
         if uid is None:
             await ctx.send(f"❌ Couldn't read player mention/id: `{user_tok}`")
             return
-        member = ctx.guild.get_member(uid)
-        if member is None:
-            await ctx.send(f"❌ Couldn't find that member in this server: `{user_tok}`")
-            return
+
+        mention_out = f"<@{uid}>"
 
         try:
             lvl = int(lvl_tok)
             if not (1 <= lvl <= 20):
                 raise ValueError
         except Exception:
-            await ctx.send(f"❌ Bad level for {member.mention}: `{lvl_tok}` (must be 1-20)")
+            await ctx.send(f"❌ Bad level for {mention_out}: `{lvl_tok}` (must be 1-20)")
             return
 
         # XP/GP picks
@@ -975,7 +969,7 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
             xp_keys = None
 
         loot_txt = "none"
-        steve_roll = None
+        steve_roll: Optional[int] = None
         if do_loot:
             steve_roll = random.randint(1, 100)
             base = rarity_for_level(lvl)
@@ -990,9 +984,9 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
             reward_str = f"{xp} xp, {gp} gp"
 
         if do_loot:
-            lines.append(f"{member.mention} - {char} {lvl} - {reward_str}, {loot_txt}, (Steve rolled: {steve_roll})")
+            lines.append(f"{mention_out} - {char} {lvl} - {reward_str}, {loot_txt}, (Steve rolled: {steve_roll})")
         else:
-            lines.append(f"{member.mention} - {char} {lvl} - {reward_str}, none")
+            lines.append(f"{mention_out} - {char} {lvl} - {reward_str}, none")
 
     # DM reward
     DM_KEYS = 10
@@ -1006,7 +1000,6 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
         + f"\nDM {DM_KEYS} 🗝️"
     )
 
-    # Discord message safety (keep under 2000)
     if len(out) > 1900:
         await ctx.send("❌ Output too long for one message. Run with fewer players or shorter text.")
         return
