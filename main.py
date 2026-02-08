@@ -1,10 +1,10 @@
 import os
 import time
-import csv
-import shlex
-import random
 import asyncio
 import traceback
+import random
+import csv
+import shlex
 from typing import Optional, List, Tuple, Dict
 
 import psycopg
@@ -21,45 +21,66 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN is not set. Add it in Railway → Variables.")
 
-
 def db():
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
         raise RuntimeError(
             "DATABASE_URL is not set. In Railway, add a Variable Reference from the Postgres service into the RP-Tracker-Bot service."
         )
-    # NOTE: Railway's DATABASE_URL is usually compatible with psycopg directly.
     return psycopg.connect(database_url)
 
-
 # =========================
-# QUEST REWARD TABLE
+# LOOT LOADING (from repo CSV files)
 # =========================
-# Level: (xp_min, xp_max, gp_min, gp_max)
-QUEST_REWARDS: Dict[int, Tuple[int, int, int, int]] = {
-    2:  (200, 600, 50, 200),
-    3:  (400, 800, 50, 200),
-    4:  (600, 1200, 50, 200),
-    5:  (800, 1400, 200, 400),
-    6:  (1000, 1800, 200, 400),
-    7:  (1200, 2000, 200, 400),
-    8:  (1400, 2200, 200, 400),
-    9:  (1600, 2400, 800, 1200),
-    10: (1800, 2600, 800, 1200),
-    11: (2000, 2800, 800, 1200),
-    12: (2200, 3000, 800, 1200),
-    13: (2400, 3200, 1500, 2000),
-    14: (2600, 3400, 1500, 2000),
-    15: (2800, 3600, 1500, 2000),
-    16: (3000, 3800, 1500, 2000),
-    17: (3200, 4000, 2000, 3000),
-    18: (3400, 4200, 2000, 3000),
-    19: (3600, 4400, 2000, 3000),
-    # 20 is special: 20 keys, gp 3000-4000
-}
+RARITY_ORDER = ["Common", "Uncommon", "Rare", "Very Rare", "Legendary"]
 
+def _repo_path(filename: str) -> str:
+    # Railway runs your repo at /app
+    base = os.getenv("RAILWAY_WORKDIR", "/app")
+    return os.path.join(base, filename)
 
-def loot_rarity_for_level(level: int) -> str:
+def load_loot_csv(path: str) -> List[str]:
+    """
+    Your CSVs are wide with lots of empty columns.
+    Item names are in the FIRST column. We only take column 0.
+    """
+    items: List[str] = []
+    if not os.path.exists(path):
+        return items
+
+    with open(path, "r", encoding="utf-8", errors="ignore", newline="") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if not row:
+                continue
+            name = (row[0] or "").strip()
+            if not name:
+                continue
+            low = name.lower()
+            if low in ("item", "items"):
+                continue
+            if "minimum trade value" in low:
+                continue
+            items.append(name)
+
+    # de-dupe while preserving order
+    seen = set()
+    out: List[str] = []
+    for it in items:
+        if it not in seen:
+            seen.add(it)
+            out.append(it)
+    return out
+
+LOOT_TABLE: Dict[str, List[str]] = {}
+for rarity in RARITY_ORDER:
+    fn = f"Guild Loot List - {rarity}.csv"
+    items = load_loot_csv(_repo_path(fn))
+    LOOT_TABLE[rarity] = items
+
+print("Loot loaded:", {k: len(v) for k, v in LOOT_TABLE.items()}, flush=True)
+
+def rarity_for_level(level: int) -> str:
     if 2 <= level <= 4:
         return "Common"
     if 5 <= level <= 8:
@@ -70,102 +91,19 @@ def loot_rarity_for_level(level: int) -> str:
         return "Very Rare"
     return "Legendary"
 
-
-RARITY_ORDER = ["Common", "Uncommon", "Rare", "Very Rare", "Legendary"]
-
-
-def rarity_shift(rarity: str, shift: int) -> str:
-    """shift: -1 down, +1 up"""
-    try:
-        idx = RARITY_ORDER.index(rarity)
-    except ValueError:
-        return rarity
-    idx = max(0, min(len(RARITY_ORDER) - 1, idx + shift))
+def rarity_shift(base: str, roll: int) -> str:
+    idx = RARITY_ORDER.index(base)
+    if roll == 1:
+        idx = max(0, idx - 1)
+    elif roll == 100:
+        idx = min(len(RARITY_ORDER) - 1, idx + 1)
     return RARITY_ORDER[idx]
 
-
-# =========================
-# LOOT LIST LOADER (CSV)
-# =========================
-LOOT_FILES = {
-    "Common": "Guild Loot List - Common.csv",
-    "Uncommon": "Guild Loot List - Uncommon.csv",
-    "Rare": "Guild Loot List - Rare.csv",
-    "Very Rare": "Guild Loot List - Very Rare.csv",
-    "Legendary": "Guild Loot List - Legendary.csv",
-}
-
-LOOT: Dict[str, List[str]] = {k: [] for k in LOOT_FILES.keys()}
-
-
-def _load_csv_items(path: str) -> List[str]:
-    items: List[str] = []
-    if not os.path.exists(path):
-        return items
-
-    with open(path, "r", encoding="utf-8", newline="") as f:
-        # Try DictReader first
-        sample = f.read(2048)
-        f.seek(0)
-        try:
-            dialect = csv.Sniffer().sniff(sample)
-        except Exception:
-            dialect = csv.excel
-
-        reader = csv.reader(f, dialect)
-        rows = list(reader)
-
-    if not rows:
-        return items
-
-    # If there's a header row, try to find a reasonable column
-    header = [c.strip() for c in rows[0]]
-    data_rows = rows[1:]
-
-    # Heuristic: pick first non-empty column that isn't obviously "rarity" etc
-    col_idx = 0
-    header_lower = [h.lower() for h in header]
-    for i, h in enumerate(header_lower):
-        if "item" in h or "name" in h:
-            col_idx = i
-            break
-
-    # If no header-looking row, treat all rows as data (no header)
-    header_looks_like_header = any(("item" in h.lower() or "name" in h.lower() or "rarity" in h.lower()) for h in header)
-    if not header_looks_like_header:
-        data_rows = rows
-        col_idx = 0
-
-    for r in data_rows:
-        if not r:
-            continue
-        if col_idx >= len(r):
-            continue
-        val = str(r[col_idx]).strip()
-        if val:
-            items.append(val)
-
-    # De-dupe while preserving order
-    seen = set()
-    uniq = []
-    for it in items:
-        if it not in seen:
-            uniq.append(it)
-            seen.add(it)
-    return uniq
-
-
-def load_loot_lists():
-    for rarity, filename in LOOT_FILES.items():
-        LOOT[rarity] = _load_csv_items(filename)
-    print(
-        "Loot loaded:",
-        {k: len(v) for k, v in LOOT.items()},
-        flush=True
-    )
-
-
-load_loot_lists()
+def random_loot(rarity: str) -> Optional[str]:
+    pool = LOOT_TABLE.get(rarity) or []
+    if not pool:
+        return None
+    return random.choice(pool)
 
 # =========================
 # DATABASE + SCHEMA (Postgres)
@@ -173,7 +111,6 @@ load_loot_lists()
 def ensure_schema():
     with db() as conn:
         with conn.cursor() as cur:
-            # Core tables
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS sessions (
                     message_id BIGINT PRIMARY KEY,
@@ -210,7 +147,7 @@ def ensure_schema():
                 )
             """)
 
-            # Migrations (safe adds)
+            # Safe migrations
             cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS guild_id BIGINT")
             cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS run_seconds DOUBLE PRECISION")
             cur.execute("ALTER TABLE participants ADD COLUMN IF NOT EXISTS capped INT DEFAULT 0")
@@ -218,26 +155,20 @@ def ensure_schema():
             cur.execute("ALTER TABLE participants ADD COLUMN IF NOT EXISTS xp_dip INT DEFAULT 0")
             cur.execute("ALTER TABLE participants ADD COLUMN IF NOT EXISTS gp_dip INT DEFAULT 0")
 
-            # Ensure NULLs become 0 where expected
+            # Normalize nulls
             cur.execute("UPDATE sessions SET run_seconds = COALESCE(run_seconds, 0) WHERE run_seconds IS NULL")
             cur.execute("UPDATE participants SET seconds = COALESCE(seconds, 0) WHERE seconds IS NULL")
             cur.execute("UPDATE participants SET capped = COALESCE(capped, 0) WHERE capped IS NULL")
             cur.execute("UPDATE participants SET xp_dip = COALESCE(xp_dip, 0) WHERE xp_dip IS NULL")
             cur.execute("UPDATE participants SET gp_dip = COALESCE(gp_dip, 0) WHERE gp_dip IS NULL")
 
-
 ensure_schema()
 
 # =========================
-# REWARD RULES (RP SESSION)
+# RP REWARD RULES
 # =========================
 def reward_hours(seconds: float) -> int:
-    """
-    Whole-hour rewards with a 45-minute threshold.
-    0h until 00:45:00, 1h at 00:45, 2h at 01:45, etc.
-    """
     return int((max(0.0, seconds) + 900) // 3600)
-
 
 def xp_per_hour_for_level(level: int) -> int:
     if 2 <= level <= 4:
@@ -252,10 +183,27 @@ def xp_per_hour_for_level(level: int) -> int:
         return 1200
     return 0
 
-
 def gp_per_hour_for_level(level: int) -> int:
     return max(0, int(level)) * 10
 
+# =========================
+# QUEST REWARD TABLE (min/max) — your values
+# =========================
+QUEST_XP: Dict[int, Tuple[int, int]] = {
+    2:(200,600), 3:(400,800), 4:(600,1200),
+    5:(800,1400), 6:(1000,1800), 7:(1200,2000), 8:(1400,2200),
+    9:(1600,2400), 10:(1800,2600), 11:(2000,2800), 12:(2200,3000),
+    13:(2400,3200), 14:(2600,3400), 15:(2800,3600), 16:(3000,3800),
+    17:(3200,4000), 18:(3400,4200), 19:(3600,4400),
+}
+QUEST_GP: Dict[int, Tuple[int, int]] = {
+    2:(50,200), 3:(50,200), 4:(50,200),
+    5:(200,400), 6:(200,400), 7:(200,400), 8:(200,400),
+    9:(800,1200), 10:(800,1200), 11:(800,1200), 12:(800,1200),
+    13:(1500,2000), 14:(1500,2000), 15:(1500,2000), 16:(1500,2000),
+    17:(2000,3000), 18:(2000,3000), 19:(2000,3000),
+    20:(3000,4000),
+}
 
 # =========================
 # THEME
@@ -266,7 +214,6 @@ def theme_color() -> discord.Color:
         return discord.Color(int(raw, 16))
     except Exception:
         return discord.Color.gold()
-
 
 def apply_theme(embed: discord.Embed, *, footer_text_override: Optional[str] = None) -> discord.Embed:
     embed.color = theme_color()
@@ -295,7 +242,6 @@ def apply_theme(embed: discord.Embed, *, footer_text_override: Optional[str] = N
 
     return embed
 
-
 # =========================
 # BOT SETUP
 # =========================
@@ -310,10 +256,8 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def handle_root(_: web.Request) -> web.Response:
     return web.Response(text="RP Tracker is running.")
 
-
 async def handle_health(_: web.Request) -> web.Response:
     return web.Response(text="ok")
-
 
 async def start_web_server():
     port = int(os.getenv("PORT", "8080"))
@@ -339,7 +283,6 @@ def keys_get(guild_id: int, user_id: int) -> Tuple[int, int]:
         return (0, 0)
     return (int(row[0] or 0), int(row[1] or 0))
 
-
 def keys_add(guild_id: int, user_id: int, amount: int):
     amount = int(amount)
     if amount <= 0:
@@ -354,7 +297,6 @@ def keys_add(guild_id: int, user_id: int, amount: int):
                     current = keys.current + EXCLUDED.current,
                     lifetime = keys.lifetime + EXCLUDED.lifetime
             """, (guild_id, user_id, amount, amount))
-
 
 def keys_sub(guild_id: int, user_id: int, amount: int):
     amount = int(amount)
@@ -372,7 +314,6 @@ def keys_sub(guild_id: int, user_id: int, amount: int):
                 SET current = GREATEST(current - %s, 0)
                 WHERE guild_id=%s AND user_id=%s
             """, (amount, guild_id, user_id))
-
 
 def build_key_embed(member: discord.Member, current: int, lifetime: int) -> discord.Embed:
     title = f"🗝️ {member.display_name}'s Keyring"
@@ -408,12 +349,7 @@ def get_session(message_id: int) -> Tuple[int, Optional[float], float, Optional[
     guild_id = int(row[4]) if row[4] is not None else None
     return state, started_at, run_seconds, channel_id, guild_id
 
-
 def list_participants(message_id: int) -> List[Tuple[int, str, int, float, int, int, int]]:
-    """
-    Returns:
-      (user_id, character, level, seconds, capped, xp_dip, gp_dip)
-    """
     with db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -425,11 +361,7 @@ def list_participants(message_id: int) -> List[Tuple[int, str, int, float, int, 
             """, (message_id,))
             rows = cur.fetchall()
 
-    return [
-        (int(uid), str(ch), int(lvl), float(secs), int(cap), int(xd), int(gd))
-        for (uid, ch, lvl, secs, cap, xd, gd) in rows
-    ]
-
+    return [(int(uid), str(ch), int(lvl), float(secs), int(cap), int(xd), int(gd)) for (uid, ch, lvl, secs, cap, xd, gd) in rows]
 
 def session_elapsed_seconds(message_id: int) -> float:
     state, started_at, run_seconds, _, _ = get_session(message_id)
@@ -437,13 +369,11 @@ def session_elapsed_seconds(message_id: int) -> float:
         return run_seconds + max(0.0, time.time() - started_at)
     return run_seconds
 
-
 def fmt_hm(seconds: float) -> str:
     seconds = max(0.0, seconds)
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     return f"{h}h {m}m"
-
 
 def state_label(state: int) -> str:
     if state == 1:
@@ -452,10 +382,8 @@ def state_label(state: int) -> str:
         return "🟡 Paused"
     return "⚪ Not Started"
 
-
 def tracker_url(guild_id: int, channel_id: int, message_id: int) -> str:
     return f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}"
-
 
 def build_embed(message_id: int) -> discord.Embed:
     state, _, _, _, _ = get_session(message_id)
@@ -487,7 +415,6 @@ def build_embed(message_id: int) -> discord.Embed:
         roster = "*No adventurers signed in yet.*"
 
     embed.add_field(name="Roster", value=roster[:1024], inline=False)
-
     embed.add_field(
         name="Reward Rule",
         value="Earn **1 hour** at **00:45**, **2 hours** at **01:45**, etc.\n"
@@ -496,7 +423,6 @@ def build_embed(message_id: int) -> discord.Embed:
     )
 
     return apply_theme(embed)
-
 
 async def update_tracker_message(message_id: int):
     _, _, _, channel_id, _ = get_session(message_id)
@@ -523,10 +449,6 @@ async def update_tracker_message(message_id: int):
 # TIME TICKER
 # =========================
 def tick_running_sessions():
-    """
-    Update participants.seconds for sessions that are RUNNING.
-    Only participants with last_tick NOT NULL accrue time.
-    """
     now = time.time()
     with db() as conn:
         with conn.cursor() as cur:
@@ -550,24 +472,19 @@ def tick_running_sessions():
                         WHERE message_id=%s AND user_id=%s
                     """, (new_secs, now, mid, int(uid)))
 
-
 async def ticker_loop():
     while True:
         try:
             tick_running_sessions()
-
             with db() as conn:
                 with conn.cursor() as cur:
                     cur.execute("SELECT message_id FROM sessions WHERE state IN (1,2)")
                     mids = [int(r[0]) for r in cur.fetchall()]
-
             for mid in mids:
                 await update_tracker_message(mid)
-
         except Exception:
             print("Ticker loop error:", flush=True)
             traceback.print_exc()
-
         await asyncio.sleep(15)
 
 # =========================
@@ -577,8 +494,6 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
     name = discord.ui.TextInput(label="Character Name", max_length=64)
     level = discord.ui.TextInput(label="Level (1-20)", max_length=3)
     capped = discord.ui.TextInput(label="Capped? (yes/no)", required=False, max_length=5, placeholder="no")
-
-    # DIPs
     xp_dip = discord.ui.TextInput(label="XP DIP? (yes/no)", required=False, max_length=5, placeholder="no")
     gp_dip = discord.ui.TextInput(label="GP DIP? (yes/no)", required=False, max_length=5, placeholder="no")
 
@@ -612,7 +527,6 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
 
         with db() as conn:
             with conn.cursor() as cur:
-                # preserve accumulated seconds if editing
                 cur.execute("""
                     SELECT COALESCE(seconds, 0) FROM participants
                     WHERE message_id=%s AND user_id=%s
@@ -620,7 +534,6 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
                 row = cur.fetchone()
                 prev_secs = float(row[0]) if row else 0.0
 
-                # Upsert
                 cur.execute("""
                     INSERT INTO participants
                         (message_id, user_id, character, level, seconds, last_tick, capped, xp_dip, gp_dip)
@@ -667,17 +580,14 @@ class RPView(discord.ui.View):
         super().__init__(timeout=None)
         self.message_id = message_id
 
-        # Row 0: player actions
         self.join_btn = discord.ui.Button(label="✅ Join", style=discord.ButtonStyle.success, custom_id=f"rp_join:{message_id}", row=0)
         self.leave_btn = discord.ui.Button(label="⏹ Leave", style=discord.ButtonStyle.secondary, custom_id=f"rp_leave:{message_id}", row=0)
         self.rejoin_btn = discord.ui.Button(label="🔁 Rejoin", style=discord.ButtonStyle.secondary, custom_id=f"rp_rejoin:{message_id}", row=0)
 
-        # Row 1: actions
         self.start_btn = discord.ui.Button(label="▶️ Start", style=discord.ButtonStyle.primary, custom_id=f"rp_start:{message_id}", row=1)
         self.pause_btn = discord.ui.Button(label="⏸ Pause", style=discord.ButtonStyle.secondary, custom_id=f"rp_pause:{message_id}", row=1)
         self.resume_btn = discord.ui.Button(label="⏵ Resume", style=discord.ButtonStyle.success, custom_id=f"rp_resume:{message_id}", row=1)
 
-        # Row 2: end
         self.end_btn = discord.ui.Button(label="🏁 End", style=discord.ButtonStyle.danger, custom_id=f"rp_end:{message_id}", row=2)
 
         self.join_btn.callback = self.join_cb
@@ -688,19 +598,13 @@ class RPView(discord.ui.View):
         self.resume_btn.callback = self.resume_cb
         self.end_btn.callback = self.end_cb
 
-        self.add_item(self.join_btn)
-        self.add_item(self.leave_btn)
-        self.add_item(self.rejoin_btn)
-        self.add_item(self.start_btn)
-        self.add_item(self.pause_btn)
-        self.add_item(self.resume_btn)
-        self.add_item(self.end_btn)
+        for b in (self.join_btn, self.leave_btn, self.rejoin_btn, self.start_btn, self.pause_btn, self.resume_btn, self.end_btn):
+            self.add_item(b)
 
     async def join_cb(self, interaction: discord.Interaction):
         await interaction.response.send_modal(JoinModal(self.message_id))
 
     async def leave_cb(self, interaction: discord.Interaction):
-        """Stop time tracking ONLY for the clicker."""
         now = time.time()
         with db() as conn:
             with conn.cursor() as cur:
@@ -728,9 +632,7 @@ class RPView(discord.ui.View):
         await update_tracker_message(self.message_id)
 
     async def rejoin_cb(self, interaction: discord.Interaction):
-        """Restart time tracking ONLY for the clicker if session is running."""
         state, _, _, _, _ = get_session(self.message_id)
-
         with db() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1 FROM participants WHERE message_id=%s AND user_id=%s", (self.message_id, interaction.user.id))
@@ -773,7 +675,6 @@ class RPView(discord.ui.View):
                     WHERE message_id=%s
                 """, (now, interaction.channel_id, interaction.guild_id, float(run_seconds or 0.0), self.message_id))
 
-                # start accruing for everyone currently participating
                 cur.execute("UPDATE participants SET last_tick=%s WHERE message_id=%s", (now, self.message_id))
 
         await interaction.response.send_message("▶️ Session started. The guild clock is running.", ephemeral=True)
@@ -810,7 +711,6 @@ class RPView(discord.ui.View):
                 cur.execute("""
                     UPDATE sessions SET state=1, started_at=%s, run_seconds=%s WHERE message_id=%s
                 """, (now, float(run_seconds or 0.0), self.message_id))
-                # resume for everyone; individual players can opt out via Leave
                 cur.execute("UPDATE participants SET last_tick=%s WHERE message_id=%s", (now, self.message_id))
 
         await interaction.response.send_message("⏵ Session resumed. The guild clock continues.", ephemeral=True)
@@ -820,7 +720,7 @@ class RPView(discord.ui.View):
         await end_session_and_post_rewards(interaction, self.message_id)
 
 # =========================
-# END SESSION CORE
+# END SESSION CORE (RP)
 # =========================
 async def end_session_and_post_rewards(interaction: discord.Interaction, message_id: int):
     if not interaction.response.is_done():
@@ -834,13 +734,11 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
             pass
         return
 
-    # Final tick for anyone still accruing
     if state == 1 and started_at is not None:
         tick_running_sessions()
         now = time.time()
         run_seconds = float(run_seconds or 0.0) + max(0.0, now - started_at)
 
-    # Stop session + stop all personal timers
     with db() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -858,7 +756,6 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
     for uid, char, lvl, secs, cap, xp_dip, gp_dip in parts:
         hrs = reward_hours(secs)
 
-        # Base rewards
         gp = gp_per_hour_for_level(lvl) * hrs
         if gp_dip:
             gp *= 2
@@ -896,182 +793,7 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
     await update_tracker_message(message_id)
 
 # =========================
-# QUEST RECORDS COMMAND
-# =========================
-def quest_reward_for(level: int, xp_mode: str, gp_mode: str) -> Tuple[str, int, int]:
-    """
-    Returns (xp_or_keys_label, xp_or_keys_amount, gp_amount)
-    - For level 20: label is "keys", amount is 20 (fixed)
-    """
-    lvl = int(level)
-    xp_mode = xp_mode.strip().lower()
-    gp_mode = gp_mode.strip().lower()
-
-    if lvl == 20:
-        # fixed keys + gp range
-        gp_min, gp_max = 3000, 4000
-        gp = gp_max if gp_mode == "gp-max" else gp_min
-        return ("keys", 20, gp)
-
-    if lvl < 2 or lvl > 19:
-        return ("xp", 0, 0)
-
-    xp_min, xp_max, gp_min, gp_max = QUEST_REWARDS.get(lvl, (0, 0, 0, 0))
-    xp = xp_max if xp_mode == "xp-max" else xp_min
-    gp = gp_max if gp_mode == "gp-max" else gp_min
-    return ("xp", xp, gp)
-
-
-def roll_loot_for_level(level: int) -> Tuple[Optional[str], Optional[int], str]:
-    """
-    Returns (item_name_or_none, steve_roll_or_none, rarity_used)
-    d100:
-      1 -> rarity below
-      100 -> rarity above
-      else -> assigned
-    """
-    lvl = int(level)
-    base = loot_rarity_for_level(lvl)
-    die = random.randint(1, 100)
-
-    shift = 0
-    if die == 1:
-        shift = -1
-    elif die == 100:
-        shift = 1
-
-    used = rarity_shift(base, shift)
-    pool = LOOT.get(used, [])
-    if not pool:
-        return (f"*No loot items loaded for {used}.*", die, used)
-
-    item = random.choice(pool)
-    return (item, die, used)
-
-
-@bot.command(name="qrecords", aliases=["Iqrecords"])
-async def qrecords_cmd(ctx: commands.Context, *, raw: str):
-    """
-    Usage:
-      !qrecords "Quest Name" "Quest Description"
-               "Difficulty" xp-max|xp-min gp-max|gp-min loot|none
-               @player1 "Char Name" 10 @player2 "Char Name" 11 ...
-
-    Notes:
-      - Char names with spaces MUST be quoted.
-      - If loot is 'loot', each player gets a d100 roll and a random item.
-      - Level 20 gets: 20 keys + gp min/max from the table.
-      - DM gets 10 keys (awarded to whoever runs the command).
-    """
-    try:
-        parts = shlex.split(raw)
-    except Exception:
-        await ctx.send("❌ Could not parse command. Make sure quotes are balanced.")
-        return
-
-    if len(parts) < 6:
-        await ctx.send(
-            '❌ Usage: `!qrecords "Quest Name" "Quest Description" "Difficulty" xp-max|xp-min gp-max|gp-min loot|none @player "Char" lvl ...`'
-        )
-        return
-
-    quest_name = parts[0]
-    quest_desc = parts[1]
-    difficulty = parts[2]
-    xp_mode = parts[3].lower()
-    gp_mode = parts[4].lower()
-    loot_flag = parts[5].lower()
-
-    if xp_mode not in ("xp-max", "xp-min"):
-        await ctx.send('❌ xp must be `xp-max` or `xp-min`.')
-        return
-    if gp_mode not in ("gp-max", "gp-min"):
-        await ctx.send('❌ gp must be `gp-max` or `gp-min`.')
-        return
-    if loot_flag not in ("loot", "none"):
-        await ctx.send('❌ loot must be `loot` or `none`.')
-        return
-
-    # parse players
-    tail = parts[6:]
-    if not tail:
-        await ctx.send("❌ You must include at least one player entry.")
-        return
-
-    entries = []
-    i = 0
-    while i < len(tail):
-        token = tail[i]
-
-        # Expect a mention or user id-ish token (we'll try converter)
-        # Best practice: actual mention <@123>
-        try:
-            member = await commands.MemberConverter().convert(ctx, token)
-        except Exception:
-            await ctx.send(f'❌ Could not read player at `{token}`. Use a proper mention like @User.')
-            return
-
-        if i + 2 >= len(tail):
-            await ctx.send('❌ Each player needs: `@player "Char Name" level`')
-            return
-
-        char_name = tail[i + 1]
-        try:
-            lvl = int(tail[i + 2])
-        except Exception:
-            await ctx.send(f'❌ Level must be a number (got `{tail[i+2]}` for {member.mention}).')
-            return
-
-        entries.append((member, char_name, lvl))
-        i += 3
-
-    # Build output
-    out_lines = []
-    out_lines.append(f"Quest Name: {quest_name}")
-    out_lines.append(f"Quest Description: {quest_desc}")
-    out_lines.append(f"Quest Difficulty: {difficulty}")
-
-    for member, char_name, lvl in entries:
-        label, xp_or_keys, gp = quest_reward_for(lvl, xp_mode, gp_mode)
-
-        loot_text = ""
-        if loot_flag == "loot":
-            item, steve_roll, used_rarity = roll_loot_for_level(lvl)
-            # Keep it simple like your sample
-            loot_text = f", {item}, (Steve rolled: {steve_roll})"
-
-        if label == "keys":
-            # level 20
-            out_lines.append(f"{member.mention} - {char_name} {lvl} - {xp_or_keys} 🗝️, {gp} gp{loot_text}")
-        else:
-            out_lines.append(f"{member.mention} - {char_name} {lvl} - {xp_or_keys} xp, {gp} gp{loot_text}")
-
-    # DM reward: 10 keys
-    dm_keys = 10
-    keys_add(ctx.guild.id, ctx.author.id, dm_keys)
-    out_lines.append(f"DM {dm_keys} 🗝️")
-
-    # Send (Discord message limit safety)
-    msg = "\n".join(out_lines)
-    if len(msg) <= 1900:
-        await ctx.send(msg)
-    else:
-        # chunk
-        chunk = []
-        size = 0
-        for line in out_lines:
-            if size + len(line) + 1 > 1900:
-                await ctx.send("\n".join(chunk))
-                chunk = [line]
-                size = len(line) + 1
-            else:
-                chunk.append(line)
-                size += len(line) + 1
-        if chunk:
-            await ctx.send("\n".join(chunk))
-
-# =========================
-# SLASH COMMANDS
+# SLASH COMMANDS (RP)
 # =========================
 @bot.tree.command(name="rpbegin", description="Post and pin the Adventurer’s Guild RP tracker.")
 async def rpbegin(interaction: discord.Interaction):
@@ -1101,7 +823,6 @@ async def rpbegin(interaction: discord.Interaction):
         await msg.pin(reason="Adventurer’s Guild RP Tracker")
     except Exception:
         pass
-
 
 @bot.tree.command(name="rpend", description="End the active RP session in this channel/thread.")
 async def rpend(interaction: discord.Interaction):
@@ -1145,24 +866,152 @@ async def key_cmd(ctx: commands.Context, amount: Optional[str] = None, *, reason
         await ctx.send("That would change nothing. 🙂")
         return
 
-    target = ctx.author
-
     if delta > 0:
-        keys_add(ctx.guild.id, target.id, delta)
+        keys_add(ctx.guild.id, ctx.author.id, delta)
     else:
-        keys_sub(ctx.guild.id, target.id, abs(delta))
+        keys_sub(ctx.guild.id, ctx.author.id, abs(delta))
 
-    current, lifetime = keys_get(ctx.guild.id, target.id)
+    current, lifetime = keys_get(ctx.guild.id, ctx.author.id)
     reason_text = reason if reason else "*No reason provided.*"
 
     ledger_text = (
-        f"Name: {target.mention}\n"
+        f"Name: {ctx.author.mention}\n"
         f"Keys Earned: {delta:+d} 🗝️\n"
         f"For: {reason_text}"
     )
-
     await ctx.send(ledger_text)
-    await ctx.send(embed=build_key_embed(target, current, lifetime))
+    await ctx.send(embed=build_key_embed(ctx.author, current, lifetime))
+
+# =========================
+# QUEST RECORDS: !qrecords
+# =========================
+def parse_user_id(token: str) -> Optional[int]:
+    t = token.strip()
+    if t.startswith("<@") and t.endswith(">"):
+        t = t[2:-1]
+        if t.startswith("!"):
+            t = t[1:]
+    if t.isdigit():
+        return int(t)
+    return None
+
+def quest_pick(level: int, mode: str) -> Tuple[Optional[int], Optional[int], Optional[int]]:
+    """
+    Returns (xp, gp, keys_for_level20_xp) where keys is only used at lvl 20.
+    mode handled separately for xp/gp.
+    """
+    lvl = int(level)
+    if lvl == 20:
+        # XP is "20 keys" for level 20 per your table
+        return (None, None, 20)
+
+    xp_min, xp_max = QUEST_XP.get(lvl, (0, 0))
+    gp_min, gp_max = QUEST_GP.get(lvl, (0, 0))
+
+    return ( (xp_max if mode == "max" else xp_min), (gp_max if mode == "max" else gp_min), None )
+
+@bot.command(name="qrecords")
+async def qrecords_cmd(ctx: commands.Context, *, args: str):
+    """
+    Usage:
+    !qrecords "Quest Name" "Quest Description" "Difficulty" "xp-min/xp-max" "gp-min/gp-max" "loot/none"
+             @player1 char1 lvl1 @player2 char2 lvl2 ...
+
+    Example:
+    !qrecords "The Backstage Door Should Never Open" "desc..." "Deadly" "xp-max" "gp-min" "loot" @Jay Mal 10 @Bob Zoe 11
+    """
+    try:
+        parts = shlex.split(args)
+    except Exception:
+        await ctx.send("❌ Could not parse. Make sure your quotes are closed properly.")
+        return
+
+    if len(parts) < 6:
+        await ctx.send('❌ Usage: !qrecords "Name" "Desc" "Difficulty" "xp-min/xp-max" "gp-min/gp-max" "loot/none" @p char lvl ...')
+        return
+
+    qname, qdesc, diff, xp_mode_raw, gp_mode_raw, loot_raw = parts[:6]
+    rest = parts[6:]
+
+    xp_mode = "max" if "max" in xp_mode_raw.lower() else "min"
+    gp_mode = "max" if "max" in gp_mode_raw.lower() else "min"
+    do_loot = loot_raw.strip().lower() in ("loot", "yes", "true", "1")
+
+    if len(rest) % 3 != 0:
+        await ctx.send("❌ Player list must be groups of 3: @player CharacterName Level")
+        return
+
+    lines: List[str] = []
+    for i in range(0, len(rest), 3):
+        user_tok, char, lvl_tok = rest[i:i+3]
+        uid = parse_user_id(user_tok)
+        if uid is None:
+            await ctx.send(f"❌ Couldn't read player mention/id: `{user_tok}`")
+            return
+        member = ctx.guild.get_member(uid)
+        if member is None:
+            await ctx.send(f"❌ Couldn't find that member in this server: `{user_tok}`")
+            return
+
+        try:
+            lvl = int(lvl_tok)
+            if not (1 <= lvl <= 20):
+                raise ValueError
+        except Exception:
+            await ctx.send(f"❌ Bad level for {member.mention}: `{lvl_tok}` (must be 1-20)")
+            return
+
+        # XP/GP picks
+        if lvl == 20:
+            gp_min, gp_max = QUEST_GP.get(20, (3000, 4000))
+            gp = gp_max if gp_mode == "max" else gp_min
+            xp = None
+            xp_keys = 20
+        else:
+            xp_min, xp_max = QUEST_XP.get(lvl, (0, 0))
+            gp_min, gp_max = QUEST_GP.get(lvl, (0, 0))
+            xp = xp_max if xp_mode == "max" else xp_min
+            gp = gp_max if gp_mode == "max" else gp_min
+            xp_keys = None
+
+        loot_txt = "none"
+        steve_roll = None
+        if do_loot:
+            steve_roll = random.randint(1, 100)
+            base = rarity_for_level(lvl)
+            final_rarity = rarity_shift(base, steve_roll)
+            item = random_loot(final_rarity)
+            loot_txt = item if item else f"(No items loaded for {final_rarity})"
+
+        # Format
+        if lvl == 20:
+            reward_str = f"{xp_keys} 🗝️, {gp} gp"
+        else:
+            reward_str = f"{xp} xp, {gp} gp"
+
+        if do_loot:
+            lines.append(f"{member.mention} - {char} {lvl} - {reward_str}, {loot_txt}, (Steve rolled: {steve_roll})")
+        else:
+            lines.append(f"{member.mention} - {char} {lvl} - {reward_str}, none")
+
+    # DM reward
+    DM_KEYS = 10
+    keys_add(ctx.guild.id, ctx.author.id, DM_KEYS)
+
+    out = (
+        f"Quest Name: {qname}\n"
+        f"Quest Description: {qdesc}\n"
+        f"Quest Difficulty: {diff}\n"
+        + "\n".join(lines)
+        + f"\nDM {DM_KEYS} 🗝️"
+    )
+
+    # Discord message safety (keep under 2000)
+    if len(out) > 1900:
+        await ctx.send("❌ Output too long for one message. Run with fewer players or shorter text.")
+        return
+
+    await ctx.send(out)
 
 # =========================
 # ERROR HANDLER
