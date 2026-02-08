@@ -883,7 +883,7 @@ async def key_cmd(ctx: commands.Context, amount: Optional[str] = None, *, reason
     await ctx.send(embed=build_key_embed(ctx.author, current, lifetime))
 
 # =========================
-# QUEST RECORDS: !qrecords (Fix A: don't lookup members; just mention by ID)
+# QUEST RECORDS: !qrecords
 # =========================
 def parse_user_id(token: str) -> Optional[int]:
     t = token.strip()
@@ -895,25 +895,15 @@ def parse_user_id(token: str) -> Optional[int]:
         return int(t)
     return None
 
-def quest_pick(level: int, mode: str) -> Tuple[Optional[int], Optional[int], Optional[int]]:
-    """
-    Returns (xp, gp, keys_for_level20_xp) where keys is only used at lvl 20.
-    mode handled separately for xp/gp.
-    """
-    lvl = int(level)
-    if lvl == 20:
-        return (None, None, 20)
-
-    xp_min, xp_max = QUEST_XP.get(lvl, (0, 0))
-    gp_min, gp_max = QUEST_GP.get(lvl, (0, 0))
-    return ((xp_max if mode == "max" else xp_min), (gp_max if mode == "max" else gp_min), None)
-
 @bot.command(name="qrecords")
 async def qrecords_cmd(ctx: commands.Context, *, args: str):
     """
     Usage:
     !qrecords "Quest Name" "Quest Description" "Difficulty" "xp-min/xp-max" "gp-min/gp-max" "loot/none"
              @player1 char1 lvl1 @player2 char2 lvl2 ...
+
+    Example:
+    !qrecords "Test Quest" "This is a test." "Deadly" "xp-max" "gp-min" "loot" @Chraytin Finn 17
     """
     try:
         parts = shlex.split(args)
@@ -945,14 +935,24 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
             await ctx.send(f"❌ Couldn't read player mention/id: `{user_tok}`")
             return
 
-        mention_out = f"<@{uid}>"
+        # --- Fix A: robust member lookup (cache -> fetch) ---
+        member = ctx.guild.get_member(uid)
+        if member is None:
+            try:
+                member = await ctx.guild.fetch_member(uid)
+            except Exception:
+                member = None
+
+        if member is None:
+            await ctx.send(f"❌ Couldn't find that member in this server: `{user_tok}`")
+            return
 
         try:
             lvl = int(lvl_tok)
             if not (1 <= lvl <= 20):
                 raise ValueError
         except Exception:
-            await ctx.send(f"❌ Bad level for {mention_out}: `{lvl_tok}` (must be 1-20)")
+            await ctx.send(f"❌ Bad level for {member.mention}: `{lvl_tok}` (must be 1-20)")
             return
 
         # XP/GP picks
@@ -969,24 +969,28 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
             xp_keys = None
 
         loot_txt = "none"
-        loot_roll: Optional[int] = None
+        gm_roll = None
         if do_loot:
-            loot_roll = random.randint(1, 100)
+            gm_roll = random.randint(1, 100)
             base = rarity_for_level(lvl)
-            final_rarity = rarity_shift(base, loot_roll)
+            final_rarity = rarity_shift(base, gm_roll)
             item = random_loot(final_rarity)
             loot_txt = item if item else f"(No items loaded for {final_rarity})"
 
-        # Format
+        # Format reward string
         if lvl == 20:
             reward_str = f"{xp_keys} 🗝️, {gp} gp"
         else:
             reward_str = f"{xp} xp, {gp} gp"
 
+        # --- NEW: Spoiler only the rewards portion ---
+        reward_bits = f"{reward_str}"
         if do_loot:
-            lines.append(f"{mention_out} - {char} {lvl} - {reward_str}, {loot_txt}, (Grandmaster rolled: {loot_roll})")
+            reward_bits += f", {loot_txt}, (Grandmaster rolled: {gm_roll})"
         else:
-            lines.append(f"{mention_out} - {char} {lvl} - {reward_str}, none")
+            reward_bits += ", none"
+
+        lines.append(f"{member.mention} - {char} {lvl} - ||{reward_bits}||")
 
     # DM reward
     DM_KEYS = 10
@@ -997,7 +1001,7 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
         f"Quest Description: {qdesc}\n"
         f"Quest Difficulty: {diff}\n"
         + "\n".join(lines)
-        + f"\nDM {DM_KEYS} 🗝️"
+        + f"\nDM ||{DM_KEYS} 🗝️||"
     )
 
     if len(out) > 1900:
