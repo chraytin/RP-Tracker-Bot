@@ -1010,6 +1010,42 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
 
     await ctx.send(out)
 
+
+# =========================
+# ARCANE EXCHANGE: !arcaneexchange
+# =========================
+@bot.command(name="arcaneexchange")
+async def arcaneexchange_cmd(ctx: commands.Context):
+    """
+    Generates 4 random items from each rarity.
+    Only item names.
+    """
+
+    output_lines = []
+
+    for rarity in reversed(RARITY_ORDER):  # Legendary → Common
+        pool = LOOT_TABLE.get(rarity, [])
+        if not pool:
+            items = ["(No items loaded)"]
+        else:
+            # If fewer than 4 exist, just use what's available
+            count = min(4, len(pool))
+            items = random.sample(pool, count)
+
+        section = [f"**__{rarity}__**"]
+        section.extend(items)
+        output_lines.append("\n".join(section))
+
+    final_output = "\n\n".join(output_lines)
+
+    # Discord safety
+    if len(final_output) > 1900:
+        await ctx.send("❌ Output too long.")
+        return
+
+    await ctx.send(final_output)
+
+
 # =========================
 # ERROR HANDLER
 # =========================
