@@ -1067,6 +1067,27 @@ async def on_app_command_error(interaction: discord.Interaction, error: Exceptio
         pass
 
 # =========================
+# ERROR HANDLER (PREFIX COMMANDS)
+# =========================
+@bot.event
+async def on_command_error(ctx: commands.Context, error: Exception):
+
+    if isinstance(error, commands.MemberNotFound):
+        await ctx.send("❌ I couldn't find that member. Try `!approve @player`.")
+        return
+
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("❌ Usage: `!approve @player`")
+        return
+
+    if isinstance(error, commands.CommandNotFound):
+        return
+
+    print("Prefix command error:", repr(error), flush=True)
+    traceback.print_exception(type(error), error, error.__traceback__)
+    await ctx.send(f"❌ Command error: `{type(error).__name__}` — {error}")
+
+# =========================
 # READY
 # =========================
 @bot.event
@@ -1109,34 +1130,65 @@ APPROVE_ADD_ROLES = {"Guild Initiate", "Apprentice (2-4)"}
 GUILD_AMBASSADOR_ROLE_NAME = "Guild Ambassador"
 
 @bot.command(name="approve")
-async def approve_cmd(ctx: commands.Context, member: discord.Member):
-    # Restrict command use
-    author_role_names = {role.name for role in ctx.author.roles}
-    if not (author_role_names & ALLOWED_APPROVE_ROLES):
-        await ctx.send("❌ Only @Stewards and @The Hearth may use this command.")
-        return
+async def approve_cmd(ctx: commands.Context, member: Optional[discord.Member] = None):
+    print(f"!approve called by {ctx.author} with member={member}", flush=True)
 
-    guild = ctx.guild
-    if guild is None:
+    if ctx.guild is None:
         await ctx.send("❌ This command can only be used in a server.")
         return
 
+    if member is None:
+        await ctx.send("❌ Usage: `!approve @player`")
+        return
+
+    # Restrict command use
+    author_role_names = {role.name for role in ctx.author.roles}
+    if not (author_role_names & ALLOWED_APPROVE_ROLES):
+        await ctx.send("❌ Only members with the Stewards or The Hearth role may use this command.")
+        return
+
+    guild = ctx.guild
+
     # Resolve roles
-    roles_to_remove = [discord.utils.get(guild.roles, name=name) for name in APPROVE_REMOVE_ROLES]
-    roles_to_add = [discord.utils.get(guild.roles, name=name) for name in APPROVE_ADD_ROLES]
+    roles_to_remove = []
+    for name in APPROVE_REMOVE_ROLES:
+        role = discord.utils.get(guild.roles, name=name)
+        if role is None:
+            await ctx.send(f"❌ Could not find the role: `{name}`")
+            return
+        roles_to_remove.append(role)
+
+    roles_to_add = []
+    for name in APPROVE_ADD_ROLES:
+        role = discord.utils.get(guild.roles, name=name)
+        if role is None:
+            await ctx.send(f"❌ Could not find the role: `{name}`")
+            return
+        roles_to_add.append(role)
+
     ambassador_role = discord.utils.get(guild.roles, name=GUILD_AMBASSADOR_ROLE_NAME)
+    if ambassador_role is None:
+        await ctx.send(f"❌ Could not find the role: `{GUILD_AMBASSADOR_ROLE_NAME}`")
+        return
 
-    missing_roles = [
-        name for name, role in (
-            [(name, discord.utils.get(guild.roles, name=name)) for name in APPROVE_REMOVE_ROLES] +
-            [(name, discord.utils.get(guild.roles, name=name)) for name in APPROVE_ADD_ROLES] +
-            [(GUILD_AMBASSADOR_ROLE_NAME, ambassador_role)]
-        )
-        if role is None
-    ]
+    # Permission sanity checks
+    me = guild.me or guild.get_member(bot.user.id)
+    if me is None:
+        await ctx.send("❌ I couldn't verify my server permissions.")
+        return
 
-    if missing_roles:
-        await ctx.send(f"❌ I couldn't find these roles in the server: {', '.join(missing_roles)}")
+    if not me.guild_permissions.manage_roles:
+        await ctx.send("❌ I need the **Manage Roles** permission to do that.")
+        return
+
+    # Make sure bot role is above target roles
+    for role in roles_to_remove + roles_to_add:
+        if me.top_role <= role:
+            await ctx.send(f"❌ My bot role must be higher than `{role.name}` to manage it.")
+            return
+
+    if me.top_role <= member.top_role:
+        await ctx.send("❌ My bot role must be higher than that member’s top role to edit their roles.")
         return
 
     # Apply role changes
@@ -1146,7 +1198,7 @@ async def approve_cmd(ctx: commands.Context, member: discord.Member):
         if roles_to_add:
             await member.add_roles(*roles_to_add, reason=f"Approved by {ctx.author}")
     except discord.Forbidden:
-        await ctx.send("❌ I don't have permission to manage one or more of those roles.")
+        await ctx.send("❌ Discord denied the role update. Check role hierarchy and permissions.")
         return
     except discord.HTTPException as e:
         await ctx.send(f"❌ Failed to update roles: {e}")
@@ -1168,12 +1220,11 @@ async def approve_cmd(ctx: commands.Context, member: discord.Member):
         color=theme_color()
     )
 
-    # Keep your normal guild styling
     embed = apply_theme(embed)
 
-    # Force the guild banner at the bottom
     banner = os.getenv("THEME_BANNER_URL")
     if banner:
         embed.set_image(url=banner)
 
     await ctx.send(embed=embed)
+    
