@@ -1098,3 +1098,82 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+# =========================
+# APPROVE COMMAND: !approve
+# =========================
+
+ALLOWED_APPROVE_ROLES = {"Stewards", "The Hearth"}
+APPROVE_REMOVE_ROLES = {"Applicant"}
+APPROVE_ADD_ROLES = {"Guild Initiate", "Apprentice (2-4)"}
+GUILD_AMBASSADOR_ROLE_NAME = "Guild Ambassador"
+
+@bot.command(name="approve")
+async def approve_cmd(ctx: commands.Context, member: discord.Member):
+    # Restrict command use
+    author_role_names = {role.name for role in ctx.author.roles}
+    if not (author_role_names & ALLOWED_APPROVE_ROLES):
+        await ctx.send("❌ Only @Stewards and @The Hearth may use this command.")
+        return
+
+    guild = ctx.guild
+    if guild is None:
+        await ctx.send("❌ This command can only be used in a server.")
+        return
+
+    # Resolve roles
+    roles_to_remove = [discord.utils.get(guild.roles, name=name) for name in APPROVE_REMOVE_ROLES]
+    roles_to_add = [discord.utils.get(guild.roles, name=name) for name in APPROVE_ADD_ROLES]
+    ambassador_role = discord.utils.get(guild.roles, name=GUILD_AMBASSADOR_ROLE_NAME)
+
+    missing_roles = [
+        name for name, role in (
+            [(name, discord.utils.get(guild.roles, name=name)) for name in APPROVE_REMOVE_ROLES] +
+            [(name, discord.utils.get(guild.roles, name=name)) for name in APPROVE_ADD_ROLES] +
+            [(GUILD_AMBASSADOR_ROLE_NAME, ambassador_role)]
+        )
+        if role is None
+    ]
+
+    if missing_roles:
+        await ctx.send(f"❌ I couldn't find these roles in the server: {', '.join(missing_roles)}")
+        return
+
+    # Apply role changes
+    try:
+        if roles_to_remove:
+            await member.remove_roles(*roles_to_remove, reason=f"Approved by {ctx.author}")
+        if roles_to_add:
+            await member.add_roles(*roles_to_add, reason=f"Approved by {ctx.author}")
+    except discord.Forbidden:
+        await ctx.send("❌ I don't have permission to manage one or more of those roles.")
+        return
+    except discord.HTTPException as e:
+        await ctx.send(f"❌ Failed to update roles: {e}")
+        return
+
+    # Build welcome embed
+    embed = discord.Embed(
+        title="Welcome to the Guild! ✅",
+        description=(
+            f"{member.mention} you're approved!\n\n"
+            f"First, check out <#1464503181873647616> to select your preferred roles\n\n"
+            f"Our Guild Rules? <#1464502590627647594>\n"
+            f"Want to chat with your fellow Guild Members? <#1464523819309076532>\n"
+            f"Rules for RP? <#1469524380408217833>\n"
+            f"Want to join an RP? <#1464489594627162348>\n\n"
+            f"Any further questions, do not hesitate to ping {ambassador_role.mention} "
+            f"for a guided tour of the server and how things work! 😁"
+        ),
+        color=theme_color()
+    )
+
+    # Keep your normal guild styling
+    embed = apply_theme(embed)
+
+    # Force the guild banner at the bottom
+    banner = os.getenv("THEME_BANNER_URL")
+    if banner:
+        embed.set_image(url=banner)
+
+    await ctx.send(embed=embed)
