@@ -1045,81 +1045,6 @@ async def arcaneexchange_cmd(ctx: commands.Context):
 
     await ctx.send(final_output)
 
-
-# =========================
-# ERROR HANDLER
-# =========================
-@bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: Exception):
-    original = getattr(error, "original", None)
-    shown = original if original else error
-
-    print("Slash command error:", repr(shown), flush=True)
-    traceback.print_exception(type(shown), shown, shown.__traceback__)
-
-    msg = f"❌ Error: `{type(shown).__name__}` — {shown}"
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(msg[:1900], ephemeral=True)
-        else:
-            await interaction.response.send_message(msg[:1900], ephemeral=True)
-    except Exception:
-        pass
-
-# =========================
-# ERROR HANDLER (PREFIX COMMANDS)
-# =========================
-@bot.event
-async def on_command_error(ctx: commands.Context, error: Exception):
-
-    if isinstance(error, commands.MemberNotFound):
-        await ctx.send("❌ I couldn't find that member. Try `!approve @player`.")
-        return
-
-    if isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("❌ Usage: `!approve @player`")
-        return
-
-    if isinstance(error, commands.CommandNotFound):
-        return
-
-    print("Prefix command error:", repr(error), flush=True)
-    traceback.print_exception(type(error), error, error.__traceback__)
-    await ctx.send(f"❌ Command error: `{type(error).__name__}` — {error}")
-
-# =========================
-# READY
-# =========================
-@bot.event
-async def on_ready():
-    with db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT message_id FROM sessions")
-            msg_ids = [int(r[0]) for r in cur.fetchall()]
-
-    for mid in msg_ids:
-        bot.add_view(RPView(mid))
-
-    try:
-        await bot.tree.sync()
-        print("Slash commands synced.", flush=True)
-    except Exception as e:
-        print("Command sync failed:", repr(e), flush=True)
-        traceback.print_exc()
-
-    print(f"Logged in as {bot.user} (guilds={len(bot.guilds)})", flush=True)
-
-# =========================
-# MAIN
-# =========================
-async def main():
-    await start_web_server()
-    asyncio.create_task(ticker_loop())
-    await bot.start(TOKEN)
-
-if __name__ == "__main__":
-    asyncio.run(main())
-
 # =========================
 # APPROVE COMMAND: !approve
 # =========================
@@ -1228,3 +1153,79 @@ async def approve_cmd(ctx: commands.Context, member: Optional[discord.Member] = 
 
     await ctx.send(embed=embed)
     
+
+
+
+# =========================
+# ERROR HANDLER
+# =========================
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: Exception):
+    original = getattr(error, "original", None)
+    shown = original if original else error
+
+    print("Slash command error:", repr(shown), flush=True)
+    traceback.print_exception(type(shown), shown, shown.__traceback__)
+
+    msg = f"❌ Error: `{type(shown).__name__}` — {shown}"
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(msg[:1900], ephemeral=True)
+        else:
+            await interaction.response.send_message(msg[:1900], ephemeral=True)
+    except Exception:
+        pass
+
+# =========================
+# ERROR HANDLER (PREFIX COMMANDS)
+# =========================
+@bot.event
+async def on_command_error(ctx: commands.Context, error: Exception):
+
+    if isinstance(error, commands.MemberNotFound):
+        await ctx.send("❌ I couldn't find that member. Try `!approve @player`.")
+        return
+
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("❌ Usage: `!approve @player`")
+        return
+
+    if isinstance(error, commands.CommandNotFound):
+        return
+
+    print("Prefix command error:", repr(error), flush=True)
+    traceback.print_exception(type(error), error, error.__traceback__)
+    await ctx.send(f"❌ Command error: `{type(error).__name__}` — {error}")
+
+# =========================
+# READY
+# =========================
+@bot.event
+async def on_ready():
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT message_id FROM sessions")
+            msg_ids = [int(r[0]) for r in cur.fetchall()]
+
+    for mid in msg_ids:
+        bot.add_view(RPView(mid))
+
+    try:
+        await bot.tree.sync()
+        print("Slash commands synced.", flush=True)
+    except Exception as e:
+        print("Command sync failed:", repr(e), flush=True)
+        traceback.print_exc()
+
+    print(f"Logged in as {bot.user} (guilds={len(bot.guilds)})", flush=True)
+
+# =========================
+# MAIN
+# =========================
+async def main():
+    await start_web_server()
+    asyncio.create_task(ticker_loop())
+    await bot.start(TOKEN)
+
+if __name__ == "__main__":
+    asyncio.run(main())
