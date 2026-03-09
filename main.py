@@ -1157,7 +1157,6 @@ async def approve_cmd(ctx: commands.Context, member: Optional[discord.Member] = 
     ),
     color=theme_color()
 )
-    )
 
     embed = apply_theme(embed)
 
