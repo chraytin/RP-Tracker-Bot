@@ -1131,18 +1131,32 @@ async def approve_cmd(ctx: commands.Context, member: Optional[discord.Member] = 
 
     # Build welcome embed
     embed = discord.Embed(
-        title="Welcome to the Guild! ✅",
-        description=(
-            f"{member.mention} you're approved!\n\n"
-            f"First, check out <#1464503181873647616> to select your preferred roles\n\n"
-            f"Our Guild Rules? <#1464502590627647594>\n"
-            f"Want to chat with your fellow Guild Members? <#1464523819309076532>\n"
-            f"Rules for RP? <#1469524380408217833>\n"
-            f"Want to join an RP? <#1464489594627162348>\n\n"
-            f"Any further questions, do not hesitate to ping {ambassador_role.mention} "
-            f"for a guided tour of the server and how things work! 😁"
-        ),
-        color=theme_color()
+    title="Welcome to the Guild! ✅",
+    description=(
+        f"{member.mention} you're approved!\n\n"
+
+        f"First, check out **#reaction-roles** to select your preferred roles.\n\n"
+
+        f"**Our Guild Rules:**\n"
+        f"https://discord.com/channels/1464479110666649790/1464509536181293068\n"
+        f"https://discord.com/channels/1464479110666649790/1464513607080349776\n"
+        f"https://discord.com/channels/1464479110666649790/1464513607080349776\n\n"
+
+        f"**Want to chat with your fellow Guild Members?**\n"
+        f"https://discord.com/channels/1464479110666649790/1464523819309076532\n\n"
+
+        f"**Rules for RP?**\n"
+        f"https://discord.com/channels/1464479110666649790/1469524380408217833\n\n"
+
+        f"**Want to join an RP?**\n"
+        f"https://discord.com/channels/1464479110666649790/1464489594627162348\n\n"
+
+        f"Any further questions, do not hesitate to ping {ambassador_role.mention} "
+        f"in https://discord.com/channels/1464479110666649790/1480193099195089056 "
+        f"for a guided tour of the server and how things work! 😁"
+    ),
+    color=theme_color()
+)
     )
 
     embed = apply_theme(embed)
