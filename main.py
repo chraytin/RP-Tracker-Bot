@@ -1135,7 +1135,7 @@ async def approve_cmd(ctx: commands.Context, member: Optional[discord.Member] = 
     description=(
         f"{member.mention} you're approved!\n\n"
 
-        f"First, check out **#reaction-roles** to select your preferred roles.\n\n"
+        f"First, check out "https://discord.com/channels/1464479110666649790/1464503181873647616" to select your preferred roles.\n\n"
 
         f"**Our Guild Rules:**\n"
         f"https://discord.com/channels/1464479110666649790/1464509536181293068\n"
