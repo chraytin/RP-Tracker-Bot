@@ -1139,7 +1139,7 @@ async def approve_cmd(ctx: commands.Context, member: Optional[discord.Member] = 
 
         f"**Our Guild Rules:**\n"
         f"https://discord.com/channels/1464479110666649790/1464509536181293068\n"
-        f"https://discord.com/channels/1464479110666649790/1464513607080349776\n"
+        f"https://discord.com/channels/1464479110666649790/1467175186053992560\n"
         f"https://discord.com/channels/1464479110666649790/1464513607080349776\n\n"
 
         f"**Want to chat with your fellow Guild Members?**\n"
