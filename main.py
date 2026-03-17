@@ -436,14 +436,25 @@ async def update_tracker_message(message_id: int):
         except Exception:
             return
 
+    # Skip archived threads
+    if isinstance(channel, discord.Thread) and channel.archived:
+        return
+
     try:
         msg = await channel.fetch_message(message_id)
     except Exception:
         return
 
     view = RPView(message_id)
-    await msg.edit(embed=build_embed(message_id), view=view)
-    bot.add_view(view)
+
+    try:
+        await msg.edit(embed=build_embed(message_id), view=view)
+        bot.add_view(view)
+    except discord.HTTPException as e:
+        # Ignore archived thread errors
+        if getattr(e, "code", None) == 50083:
+            return
+        raise
 
 # =========================
 # TIME TICKER
