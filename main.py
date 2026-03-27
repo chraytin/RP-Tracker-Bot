@@ -32,7 +32,7 @@ def db():
 # =========================
 # LOOT LOADING (from repo CSV files)
 # =========================
-RARITY_ORDER = ["Common", "Uncommon", "Rare", "Very Rare", "Legendary"]
+RARITY_ORDER = ["Common", "Uncommon", "Rare", "Very Rare", "Legendary", "Artifact"]
 
 def _repo_path(filename: str) -> str:
     # Railway runs your repo at /app
@@ -91,12 +91,20 @@ def rarity_for_level(level: int) -> str:
         return "Very Rare"
     return "Legendary"
 
-def rarity_shift(base: str, roll: int) -> str:
+def rarity_shift(base: str, roll: int, level: int) -> str:
+    # Artifact ONLY if:
+    # level 20+ AND roll == 100
+    if level >= 20 and roll == 100:
+        return "Artifact"
+
     idx = RARITY_ORDER.index(base)
+
     if roll == 1:
         idx = max(0, idx - 1)
     elif roll == 100:
-        idx = min(len(RARITY_ORDER) - 1, idx + 1)
+        # Cap at Legendary unless level 20
+        idx = min(RARITY_ORDER.index("Legendary"), idx + 1)
+
     return RARITY_ORDER[idx]
 
 def random_loot(rarity: str) -> Optional[str]:
@@ -984,7 +992,7 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
         if do_loot:
             gm_roll = random.randint(1, 100)
             base = rarity_for_level(lvl)
-            final_rarity = rarity_shift(base, gm_roll)
+            final_rarity = rarity_shift(base, gm_roll, lvl)
             item = random_loot(final_rarity)
             loot_txt = item if item else f"(No items loaded for {final_rarity})"
 
