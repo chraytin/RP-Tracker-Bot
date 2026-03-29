@@ -35,7 +35,6 @@ def db():
 RARITY_ORDER = ["Common", "Uncommon", "Rare", "Very Rare", "Legendary", "Artifact"]
 
 def _repo_path(filename: str) -> str:
-    # Railway runs your repo at /app
     base = os.getenv("RAILWAY_WORKDIR", "/app")
     return os.path.join(base, filename)
 
@@ -63,7 +62,6 @@ def load_loot_csv(path: str) -> List[str]:
                 continue
             items.append(name)
 
-    # de-dupe while preserving order
     seen = set()
     out: List[str] = []
     for it in items:
@@ -92,8 +90,7 @@ def rarity_for_level(level: int) -> str:
     return "Legendary"
 
 def rarity_shift(base: str, roll: int, level: int) -> str:
-    # Artifact ONLY if:
-    # level 20+ AND roll == 100
+    # Artifact ONLY if level 20+ AND roll == 100
     if level >= 20 and roll == 100:
         return "Artifact"
 
@@ -102,7 +99,6 @@ def rarity_shift(base: str, roll: int, level: int) -> str:
     if roll == 1:
         idx = max(0, idx - 1)
     elif roll == 100:
-        # Cap at Legendary unless level 20
         idx = min(RARITY_ORDER.index("Legendary"), idx + 1)
 
     return RARITY_ORDER[idx]
@@ -195,7 +191,7 @@ def gp_per_hour_for_level(level: int) -> int:
     return max(0, int(level)) * 10
 
 # =========================
-# QUEST REWARD TABLE (min/max) — your values
+# QUEST REWARD TABLE (min/max)
 # =========================
 QUEST_XP: Dict[int, Tuple[int, int]] = {
     2:(600,1200), 3:(600,1200), 4:(600,1200),
@@ -255,7 +251,7 @@ def apply_theme(embed: discord.Embed, *, footer_text_override: Optional[str] = N
 # =========================
 intents = discord.Intents.default()
 intents.guilds = True
-intents.message_content = True  # for !key and !qrecords
+intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # =========================
@@ -432,6 +428,43 @@ def build_embed(message_id: int) -> discord.Embed:
 
     return apply_theme(embed)
 
+def build_rp_status_announcement(action: str, actor: discord.abc.User, message_id: int) -> discord.Embed:
+    state, _, _, _, _ = get_session(message_id)
+    elapsed = session_elapsed_seconds(message_id)
+
+    titles = {
+        "start": "▶️ RP Session Started",
+        "pause": "⏸ RP Session Paused",
+        "resume": "⏵ RP Session Resumed",
+        "end": "🏁 RP Session Ended",
+    }
+
+    descriptions = {
+        "start": "The Grandmaster has marked this RP as officially underway.",
+        "pause": "The Grandmaster has temporarily halted this RP.",
+        "resume": "The Grandmaster has declared this RP active once more.",
+        "end": "The Grandmaster has formally closed this RP session.",
+    }
+
+    embed = discord.Embed(
+        title=titles.get(action, "📜 RP Session Update"),
+        description=descriptions.get(action, "The status of this RP has changed."),
+        color=theme_color()
+    )
+    embed.add_field(name="Status", value=state_label(state), inline=True)
+    embed.add_field(name="Session Time", value=f"⏳ **{fmt_hm(elapsed)}**", inline=True)
+    embed.add_field(name="Filed By", value=actor.mention, inline=False)
+
+    return apply_theme(embed, footer_text_override="Filed in the Guild Ledger")
+
+async def post_rp_status_announcement(channel: discord.abc.Messageable, action: str, actor: discord.abc.User, message_id: int):
+    try:
+        embed = build_rp_status_announcement(action, actor, message_id)
+        await channel.send(embed=embed)
+    except Exception:
+        print(f"Failed to post RP status announcement: action={action}, message_id={message_id}", flush=True)
+        traceback.print_exc()
+
 async def update_tracker_message(message_id: int):
     _, _, _, channel_id, _ = get_session(message_id)
     if not channel_id:
@@ -444,7 +477,6 @@ async def update_tracker_message(message_id: int):
         except Exception:
             return
 
-    # Skip archived threads
     if isinstance(channel, discord.Thread) and channel.archived:
         return
 
@@ -458,9 +490,31 @@ async def update_tracker_message(message_id: int):
     try:
         await msg.edit(embed=build_embed(message_id), view=view)
         bot.add_view(view)
+
     except discord.HTTPException as e:
-        # Ignore archived thread errors
         if getattr(e, "code", None) == 50083:
+            return
+        if getattr(e, "status", None) in (502, 503, 504):
+            print(f"Skipping temporary Discord API error while updating tracker {message_id}: {e}", flush=True)
+            return
+        raise
+
+    except discord.DiscordServerError as e:
+        print(f"Skipping temporary Discord server error while updating tracker {message_id}: {e}", flush=True)
+        return
+
+    except Exception as e:
+        err_text = str(e).lower()
+        transient_markers = (
+            "connection reset by peer",
+            "service unavailable",
+            "upstream connect error",
+            "disconnect/reset before headers",
+            "remote connection failure",
+            "overflow",
+        )
+        if any(marker in err_text for marker in transient_markers):
+            print(f"Skipping temporary network error while updating tracker {message_id}: {e}", flush=True)
             return
         raise
 
@@ -495,15 +549,23 @@ async def ticker_loop():
     while True:
         try:
             tick_running_sessions()
+
             with db() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT message_id FROM sessions WHERE state IN (1,2)")
+                    cur.execute("SELECT message_id FROM sessions WHERE state=1")
                     mids = [int(r[0]) for r in cur.fetchall()]
+
             for mid in mids:
-                await update_tracker_message(mid)
+                try:
+                    await update_tracker_message(mid)
+                except Exception:
+                    print(f"Ticker update failed for message_id={mid}", flush=True)
+                    traceback.print_exc()
+
         except Exception:
             print("Ticker loop error:", flush=True)
             traceback.print_exc()
+
         await asyncio.sleep(15)
 
 # =========================
@@ -697,6 +759,7 @@ class RPView(discord.ui.View):
                 cur.execute("UPDATE participants SET last_tick=%s WHERE message_id=%s", (now, self.message_id))
 
         await interaction.response.send_message("▶️ Session started. The guild clock is running.", ephemeral=True)
+        await post_rp_status_announcement(interaction.channel, "start", interaction.user, self.message_id)
         await update_tracker_message(self.message_id)
 
     async def pause_cb(self, interaction: discord.Interaction):
@@ -716,6 +779,7 @@ class RPView(discord.ui.View):
                 cur.execute("UPDATE participants SET last_tick=NULL WHERE message_id=%s", (self.message_id,))
 
         await interaction.response.send_message("⏸ Session paused. Quills down.", ephemeral=True)
+        await post_rp_status_announcement(interaction.channel, "pause", interaction.user, self.message_id)
         await update_tracker_message(self.message_id)
 
     async def resume_cb(self, interaction: discord.Interaction):
@@ -733,6 +797,7 @@ class RPView(discord.ui.View):
                 cur.execute("UPDATE participants SET last_tick=%s WHERE message_id=%s", (now, self.message_id))
 
         await interaction.response.send_message("⏵ Session resumed. The guild clock continues.", ephemeral=True)
+        await post_rp_status_announcement(interaction.channel, "resume", interaction.user, self.message_id)
         await update_tracker_message(self.message_id)
 
     async def end_cb(self, interaction: discord.Interaction):
@@ -765,6 +830,10 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
                 (float(run_seconds or 0.0), message_id)
             )
             cur.execute("UPDATE participants SET last_tick=NULL WHERE message_id=%s", (message_id,))
+
+    channel = interaction.channel
+    if channel is not None:
+        await post_rp_status_announcement(channel, "end", interaction.user, message_id)
 
     parts = list_participants(message_id)
     start_link = tracker_url(guild_id, channel_id, message_id)
@@ -920,9 +989,6 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
     Usage:
     !qrecords "Quest Name" "Quest Description" "Difficulty" "xp-min/xp-max" "gp-min/gp-max" "loot/none"
              @player1 char1 lvl1 @player2 char2 lvl2 ...
-
-    Example:
-    !qrecords "Test Quest" "This is a test." "Deadly" "xp-max" "gp-min" "loot" @Chraytin Finn 17
     """
     try:
         parts = shlex.split(args)
@@ -954,7 +1020,6 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
             await ctx.send(f"❌ Couldn't read player mention/id: `{user_tok}`")
             return
 
-        # --- Fix A: robust member lookup (cache -> fetch) ---
         member = ctx.guild.get_member(uid)
         if member is None:
             try:
@@ -974,7 +1039,6 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
             await ctx.send(f"❌ Bad level for {member.mention}: `{lvl_tok}` (must be 1-20)")
             return
 
-        # XP/GP picks
         if lvl == 20:
             gp_min, gp_max = QUEST_GP.get(20, (3000, 4000))
             gp = gp_max if gp_mode == "max" else gp_min
@@ -996,13 +1060,11 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
             item = random_loot(final_rarity)
             loot_txt = item if item else f"(No items loaded for {final_rarity})"
 
-        # Format reward string
         if lvl == 20:
             reward_str = f"{xp_keys} 🗝️, {gp} gp"
         else:
             reward_str = f"{xp} xp, {gp} gp"
 
-        # --- NEW: Spoiler only the rewards portion ---
         reward_bits = f"{reward_str}"
         if do_loot:
             reward_bits += f", {loot_txt}, (Grandmaster rolled: {gm_roll})"
@@ -1011,7 +1073,6 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
 
         lines.append(f"{member.mention} - {char} {lvl} - ||{reward_bits}||")
 
-    # DM reward
     DM_KEYS = 10
     keys_add(ctx.guild.id, ctx.author.id, DM_KEYS)
 
@@ -1029,25 +1090,18 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
 
     await ctx.send(out)
 
-
 # =========================
 # ARCANE EXCHANGE: !arcaneexchange
 # =========================
 @bot.command(name="arcaneexchange")
 async def arcaneexchange_cmd(ctx: commands.Context):
-    """
-    Generates 4 random items from each rarity.
-    Only item names.
-    """
-
     output_lines = []
 
-    for rarity in reversed(RARITY_ORDER):  # Legendary → Common
+    for rarity in reversed(RARITY_ORDER):  # Artifact -> Common
         pool = LOOT_TABLE.get(rarity, [])
         if not pool:
             items = ["(No items loaded)"]
         else:
-            # If fewer than 4 exist, just use what's available
             count = min(4, len(pool))
             items = random.sample(pool, count)
 
@@ -1057,7 +1111,6 @@ async def arcaneexchange_cmd(ctx: commands.Context):
 
     final_output = "\n\n".join(output_lines)
 
-    # Discord safety
     if len(final_output) > 1900:
         await ctx.send("❌ Output too long.")
         return
@@ -1067,7 +1120,6 @@ async def arcaneexchange_cmd(ctx: commands.Context):
 # =========================
 # APPROVE COMMAND: !approve
 # =========================
-
 ALLOWED_APPROVE_ROLES = {"Stewards", "The Hearth", "Guild Scribe"}
 APPROVE_REMOVE_ROLES = {"Applicant"}
 APPROVE_ADD_ROLES = {"Guild Initiate", "Apprentice (2-4)"}
@@ -1085,7 +1137,6 @@ async def approve_cmd(ctx: commands.Context, member: Optional[discord.Member] = 
         await ctx.send("❌ Usage: `!approve @player`")
         return
 
-    # Restrict command use
     author_role_names = {role.name for role in ctx.author.roles}
     if not (author_role_names & ALLOWED_APPROVE_ROLES):
         await ctx.send("❌ Only members with the Stewards or The Hearth role may use this command.")
@@ -1093,7 +1144,6 @@ async def approve_cmd(ctx: commands.Context, member: Optional[discord.Member] = 
 
     guild = ctx.guild
 
-    # Resolve roles
     roles_to_remove = []
     for name in APPROVE_REMOVE_ROLES:
         role = discord.utils.get(guild.roles, name=name)
@@ -1115,7 +1165,6 @@ async def approve_cmd(ctx: commands.Context, member: Optional[discord.Member] = 
         await ctx.send(f"❌ Could not find the role: `{GUILD_AMBASSADOR_ROLE_NAME}`")
         return
 
-    # Permission sanity checks
     me = guild.me or guild.get_member(bot.user.id)
     if me is None:
         await ctx.send("❌ I couldn't verify my server permissions.")
@@ -1125,7 +1174,6 @@ async def approve_cmd(ctx: commands.Context, member: Optional[discord.Member] = 
         await ctx.send("❌ I need the **Manage Roles** permission to do that.")
         return
 
-    # Make sure bot role is above target roles
     for role in roles_to_remove + roles_to_add:
         if me.top_role <= role:
             await ctx.send(f"❌ My bot role must be higher than `{role.name}` to manage it.")
@@ -1135,7 +1183,6 @@ async def approve_cmd(ctx: commands.Context, member: Optional[discord.Member] = 
         await ctx.send("❌ My bot role must be higher than that member’s top role to edit their roles.")
         return
 
-    # Apply role changes
     try:
         if roles_to_remove:
             await member.remove_roles(*roles_to_remove, reason=f"Approved by {ctx.author}")
@@ -1148,34 +1195,27 @@ async def approve_cmd(ctx: commands.Context, member: Optional[discord.Member] = 
         await ctx.send(f"❌ Failed to update roles: {e}")
         return
 
-    # Build welcome embed
     embed = discord.Embed(
-    title="Welcome to the Guild! ✅",
-    description=(
-        f"{member.mention} you're approved!\n\n"
-
-        f"First, check out https://discord.com/channels/1464479110666649790/1464503181873647616 to select your preferred roles.\n\n"
-
-        f"**Our Guild Rules:**\n"
-        f"https://discord.com/channels/1464479110666649790/1464509536181293068\n"
-        f"https://discord.com/channels/1464479110666649790/1467175186053992560\n"
-        f"https://discord.com/channels/1464479110666649790/1464513607080349776\n\n"
-
-        f"**Want to chat with your fellow Guild Members?**\n"
-        f"https://discord.com/channels/1464479110666649790/1464523819309076532\n\n"
-
-        f"**Rules for RP?**\n"
-        f"https://discord.com/channels/1464479110666649790/1469524380408217833\n\n"
-
-        f"**Want to join an RP?**\n"
-        f"https://discord.com/channels/1464479110666649790/1464489594627162348\n\n"
-
-        f"Any further questions, do not hesitate to ping {ambassador_role.mention} "
-        f"in https://discord.com/channels/1464479110666649790/1480193099195089056 "
-        f"for a guided tour of the server and how things work! 😁"
-    ),
-    color=theme_color()
-)
+        title="Welcome to the Guild! ✅",
+        description=(
+            f"{member.mention} you're approved!\n\n"
+            f"First, check out https://discord.com/channels/1464479110666649790/1464503181873647616 to select your preferred roles.\n\n"
+            f"**Our Guild Rules:**\n"
+            f"https://discord.com/channels/1464479110666649790/1464509536181293068\n"
+            f"https://discord.com/channels/1464479110666649790/1467175186053992560\n"
+            f"https://discord.com/channels/1464479110666649790/1464513607080349776\n\n"
+            f"**Want to chat with your fellow Guild Members?**\n"
+            f"https://discord.com/channels/1464479110666649790/1464523819309076532\n\n"
+            f"**Rules for RP?**\n"
+            f"https://discord.com/channels/1464479110666649790/1469524380408217833\n\n"
+            f"**Want to join an RP?**\n"
+            f"https://discord.com/channels/1464479110666649790/1464489594627162348\n\n"
+            f"Any further questions, do not hesitate to ping {ambassador_role.mention} "
+            f"in https://discord.com/channels/1464479110666649790/1480193099195089056 "
+            f"for a guided tour of the server and how things work! 😁"
+        ),
+        color=theme_color()
+    )
 
     embed = apply_theme(embed)
 
@@ -1184,9 +1224,6 @@ async def approve_cmd(ctx: commands.Context, member: Optional[discord.Member] = 
         embed.set_image(url=banner)
 
     await ctx.send(embed=embed)
-    
-
-
 
 # =========================
 # ERROR HANDLER
@@ -1213,7 +1250,6 @@ async def on_app_command_error(interaction: discord.Interaction, error: Exceptio
 # =========================
 @bot.event
 async def on_command_error(ctx: commands.Context, error: Exception):
-
     if isinstance(error, commands.MemberNotFound):
         await ctx.send("❌ I couldn't find that member. Try `!approve @player`.")
         return
