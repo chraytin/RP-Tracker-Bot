@@ -855,28 +855,21 @@ for uid, char, lvl, secs, cap, xp_dip, gp_dip in parts:
         dip_tags.append("GP×2")
     dip_txt = f" *({', '.join(dip_tags)})*" if dip_tags else ""
 
-    # Level 20s get keys instead of XP
     if lvl >= 20:
         keys = hrs
         keys_add(guild_id, uid, keys)
         lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp{dip_txt}")
 
-    elif cap:
+    elif cap:  # ✅ MUST be elif
         keys = hrs
         keys_add(guild_id, uid, keys)
         lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp{dip_txt}")
 
-    else:
+    else:  # ✅ now valid
         xp = xp_per_hour_for_level(lvl) * hrs
         if xp_dip:
             xp *= 2
         lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{xp}** xp, **{gp}** gp{dip_txt}")
-    else:
-        xp = xp_per_hour_for_level(lvl) * hrs
-        if xp_dip:
-            xp *= 2
-        lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{xp}** xp, **{gp}** gp{dip_txt}")
-
     if not lines:
         lines = ["*(no participants)*"]
 
