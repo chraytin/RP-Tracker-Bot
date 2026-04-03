@@ -841,7 +841,7 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
     header = "🏁 **Guild Ledger Closed — Rewards Issued**\nThe registrar tallies the earnings and stamps the record.\n"
     lines = []
 
-for uid, char, lvl, secs, cap, xp_dip, gp_dip in parts:
+  for uid, char, lvl, secs, cap, xp_dip, gp_dip in parts:
     hrs = reward_hours(secs)
 
     gp = gp_per_hour_for_level(lvl) * hrs
