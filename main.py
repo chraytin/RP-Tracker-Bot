@@ -842,28 +842,35 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
     lines = []
 
     for uid, char, lvl, secs, cap, xp_dip, gp_dip in parts:
-        hrs = reward_hours(secs)
+    hrs = reward_hours(secs)
 
-        gp = gp_per_hour_for_level(lvl) * hrs
-        if gp_dip:
-            gp *= 2
+    gp = gp_per_hour_for_level(lvl) * hrs
+    if gp_dip:
+        gp *= 2
 
-        dip_tags = []
+    dip_tags = []
+    if xp_dip:
+        dip_tags.append("XP×2")
+    if gp_dip:
+        dip_tags.append("GP×2")
+    dip_txt = f" *({', '.join(dip_tags)})*" if dip_tags else ""
+
+    # Level 20s get keys instead of XP
+    if lvl >= 20:
+        keys = hrs
+        keys_add(guild_id, uid, keys)
+        lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp{dip_txt}")
+
+    elif cap:
+        keys = hrs
+        keys_add(guild_id, uid, keys)
+        lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp{dip_txt}")
+
+    else:
+        xp = xp_per_hour_for_level(lvl) * hrs
         if xp_dip:
-            dip_tags.append("XP×2")
-        if gp_dip:
-            dip_tags.append("GP×2")
-        dip_txt = f" *({', '.join(dip_tags)})*" if dip_tags else ""
-
-        if cap:
-            keys = hrs
-            keys_add(guild_id, uid, keys)
-            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp{dip_txt}")
-        else:
-            xp = xp_per_hour_for_level(lvl) * hrs
-            if xp_dip:
-                xp *= 2
-            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{xp}** xp, **{gp}** gp{dip_txt}")
+            xp *= 2
+        lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{xp}** xp, **{gp}** gp{dip_txt}")
 
     if not lines:
         lines = ["*(no participants)*"]
