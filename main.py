@@ -811,11 +811,9 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
         await interaction.response.defer(thinking=False)
 
     state, started_at, run_seconds, channel_id, guild_id = get_session(message_id)
+
     if not channel_id or not guild_id:
-        try:
-            await interaction.followup.send("❌ Could not locate this session in the ledger.", ephemeral=True)
-        except Exception:
-            pass
+        await interaction.followup.send("❌ Could not locate this session.", ephemeral=True)
         return
 
     if state == 1 and started_at is not None:
@@ -831,51 +829,49 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
             )
             cur.execute("UPDATE participants SET last_tick=NULL WHERE message_id=%s", (message_id,))
 
-    channel = interaction.channel
-    if channel is not None:
-        await post_rp_status_announcement(channel, "end", interaction.user, message_id)
-
     parts = list_participants(message_id)
     start_link = tracker_url(guild_id, channel_id, message_id)
 
-    header = "🏁 **Guild Ledger Closed — Rewards Issued**\nThe registrar tallies the earnings and stamps the record.\n"
+    header = "🏁 **Guild Ledger Closed — Rewards Issued**\n"
     lines = []
 
-  for uid, char, lvl, secs, cap, xp_dip, gp_dip in parts:
-    hrs = reward_hours(secs)
+    for uid, char, lvl, secs, cap, xp_dip, gp_dip in parts:
+        hrs = reward_hours(secs)
 
-    gp = gp_per_hour_for_level(lvl) * hrs
-    if gp_dip:
-        gp *= 2
+        gp = gp_per_hour_for_level(lvl) * hrs
+        if gp_dip:
+            gp *= 2
 
-    dip_tags = []
-    if xp_dip:
-        dip_tags.append("XP×2")
-    if gp_dip:
-        dip_tags.append("GP×2")
-    dip_txt = f" *({', '.join(dip_tags)})*" if dip_tags else ""
-
-    if lvl >= 20:
-        keys = hrs
-        keys_add(guild_id, uid, keys)
-        lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp{dip_txt}")
-
-    elif cap:  # ✅ MUST be elif
-        keys = hrs
-        keys_add(guild_id, uid, keys)
-        lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp{dip_txt}")
-
-    else:  # ✅ now valid
-        xp = xp_per_hour_for_level(lvl) * hrs
+        dip_tags = []
         if xp_dip:
-            xp *= 2
-        lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{xp}** xp, **{gp}** gp{dip_txt}")
+            dip_tags.append("XP×2")
+        if gp_dip:
+            dip_tags.append("GP×2")
+        dip_txt = f" *({', '.join(dip_tags)})*" if dip_tags else ""
+
+        if lvl >= 20:
+            keys = hrs
+            keys_add(guild_id, uid, keys)
+            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp{dip_txt}")
+
+        elif cap:
+            keys = hrs
+            keys_add(guild_id, uid, keys)
+            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp{dip_txt}")
+
+        else:
+            xp = xp_per_hour_for_level(lvl) * hrs
+            if xp_dip:
+                xp *= 2
+            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{xp}** xp, **{gp}** gp{dip_txt}")
+
     if not lines:
         lines = ["*(no participants)*"]
 
     content = header + "\n".join(lines)
 
     rewards_msg = await interaction.followup.send(content, wait=True)
+
     try:
         end_link = rewards_msg.jump_url
         links_bottom = f"\n\n🔗 **Start:** {start_link}\n🔗 **End:** {end_link}"
