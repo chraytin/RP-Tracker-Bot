@@ -841,7 +841,7 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
     header = "🏁 **Guild Ledger Closed — Rewards Issued**\nThe registrar tallies the earnings and stamps the record.\n"
     lines = []
 
-    for uid, char, lvl, secs, cap, xp_dip, gp_dip in parts:
+for uid, char, lvl, secs, cap, xp_dip, gp_dip in parts:
     hrs = reward_hours(secs)
 
     gp = gp_per_hour_for_level(lvl) * hrs
@@ -866,6 +866,11 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
         keys_add(guild_id, uid, keys)
         lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp{dip_txt}")
 
+    else:
+        xp = xp_per_hour_for_level(lvl) * hrs
+        if xp_dip:
+            xp *= 2
+        lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{xp}** xp, **{gp}** gp{dip_txt}")
     else:
         xp = xp_per_hour_for_level(lvl) * hrs
         if xp_dip:
