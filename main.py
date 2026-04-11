@@ -601,9 +601,9 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
 
         is_capped = self._is_yes(self.capped.value)
 
-# 400 member event: RP XP/GP are doubled automatically, so dips are disabled
-has_xp_dip = 0
-has_gp_dip = 0
+        # 400 member event: RP XP/GP are doubled automatically, so dips are disabled
+        has_xp_dip = 0
+        has_gp_dip = 0
         now = time.time()
         state, _, _, _, _ = get_session(self.message_id)
 
@@ -643,16 +643,16 @@ has_gp_dip = 0
                 ))
 
        tags = []
-if is_capped:
-    tags.append("Capped: 🗝️/hr")
-tag_txt = f" *({', '.join(tags)})*" if tags else ""
+       if is_capped:
+          tags.append("Capped: 🗝️/hr")
+       tag_txt = f" *({', '.join(tags)})*" if tags else ""
 
-await interaction.response.send_message(
-    f"✅ Signed in: **{cname}** (lvl {lvl}){tag_txt}\n\n"
-    f"🎉 **400 Member Event Active:** RP **XP and GP are automatically doubled**.\n"
-    f"XP/GP dips are disabled during the event.",
-    ephemeral=True
-)
+       await interaction.response.send_message(
+           f"✅ Signed in: **{cname}** (lvl {lvl}){tag_txt}\n\n"
+           f"🎉 **400 Member Event Active:** RP **XP and GP are automatically doubled**.\n"
+           f"XP/GP dips are disabled during the event.",
+           ephemeral=True
+       )
         await update_tracker_message(self.message_id)
 
 # =========================
@@ -840,28 +840,28 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
     for uid, char, lvl, secs, cap, xp_dip, gp_dip in parts:
     hrs = reward_hours(secs)
 
-    # 400 member event: RP GP is automatically doubled
-    gp = gp_per_hour_for_level(lvl) * hrs * 2
+        # 400 member event: RP GP is automatically doubled
+        gp = gp_per_hour_for_level(lvl) * hrs * 2
 
-    # During the event, dips are disabled, so no dip tags
-    dip_txt = ""
+        # During the event, dips are disabled, so no dip tags
+        dip_txt = ""
 
-    # Level 20s get keys instead of XP
-    if lvl >= 20:
-        keys = hrs
-        keys_add(guild_id, uid, keys)
-        lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp")
+        # Level 20s get keys instead of XP
+        if lvl >= 20:
+            keys = hrs
+            keys_add(guild_id, uid, keys)
+            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp")
 
-    # Capped characters also get keys instead of XP
-    elif cap:
-        keys = hrs
-        keys_add(guild_id, uid, keys)
-        lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp")
+        # Capped characters also get keys instead of XP
+        elif cap:
+            keys = hrs
+            keys_add(guild_id, uid, keys)
+            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp")
 
-    # Everyone else gets XP, automatically doubled
-    else:
-        xp = xp_per_hour_for_level(lvl) * hrs * 2
-        lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{xp}** xp, **{gp}** gp")
+        # Everyone else gets XP, automatically doubled
+        else:
+            xp = xp_per_hour_for_level(lvl) * hrs * 2
+            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{xp}** xp, **{gp}** gp")
     if not lines:
         lines = ["*(no participants)*"]
 
