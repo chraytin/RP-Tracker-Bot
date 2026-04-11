@@ -1288,8 +1288,9 @@ async def on_app_command_error(interaction: discord.Interaction, error: Exceptio
             await interaction.followup.send(msg[:1900], ephemeral=True)
         else:
             await interaction.response.send_message(msg[:1900], ephemeral=True)
-    except Exception: we
+    except Exception:
         pass
+
 
 # =========================
 # ERROR HANDLER (PREFIX COMMANDS)
@@ -1310,7 +1311,6 @@ async def on_command_error(ctx: commands.Context, error: Exception):
     print("Prefix command error:", repr(error), flush=True)
     traceback.print_exception(type(error), error, error.__traceback__)
     await ctx.send(f"❌ Command error: `{type(error).__name__}` — {error}")
-
 # =========================
 # READY
 # =========================
@@ -1332,6 +1332,7 @@ async def on_ready():
         traceback.print_exc()
 
     print(f"Logged in as {bot.user} (guilds={len(bot.guilds)})", flush=True)
+
 
 # =========================
 # MAIN
