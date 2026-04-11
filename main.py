@@ -600,9 +600,10 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
             return await interaction.response.send_message("Name can’t be empty.", ephemeral=True)
 
         is_capped = self._is_yes(self.capped.value)
-        has_xp_dip = self._is_yes(self.xp_dip.value)
-        has_gp_dip = self._is_yes(self.gp_dip.value)
 
+# 400 member event: RP XP/GP are doubled automatically, so dips are disabled
+has_xp_dip = 0
+has_gp_dip = 0
         now = time.time()
         state, _, _, _, _ = get_session(self.message_id)
 
@@ -641,16 +642,17 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
                     has_gp_dip
                 ))
 
-        tags = []
-        if is_capped:
-            tags.append("Capped: 🗝️/hr")
-        if has_xp_dip:
-            tags.append("XP DIP")
-        if has_gp_dip:
-            tags.append("GP DIP")
-        tag_txt = f" *({', '.join(tags)})*" if tags else ""
+       tags = []
+if is_capped:
+    tags.append("Capped: 🗝️/hr")
+tag_txt = f" *({', '.join(tags)})*" if tags else ""
 
-        await interaction.response.send_message(f"✅ Signed in: **{cname}** (lvl {lvl}){tag_txt}", ephemeral=True)
+await interaction.response.send_message(
+    f"✅ Signed in: **{cname}** (lvl {lvl}){tag_txt}\n\n"
+    f"🎉 **400 Member Event Active:** RP **XP and GP are automatically doubled**.\n"
+    f"XP/GP dips are disabled during the event.",
+    ephemeral=True
+)
         await update_tracker_message(self.message_id)
 
 # =========================
@@ -836,35 +838,30 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
     lines = []
 
     for uid, char, lvl, secs, cap, xp_dip, gp_dip in parts:
-        hrs = reward_hours(secs)
+    hrs = reward_hours(secs)
 
-        gp = gp_per_hour_for_level(lvl) * hrs
-        if gp_dip:
-            gp *= 2
+    # 400 member event: RP GP is automatically doubled
+    gp = gp_per_hour_for_level(lvl) * hrs * 2
 
-        dip_tags = []
-        if xp_dip:
-            dip_tags.append("XP×2")
-        if gp_dip:
-            dip_tags.append("GP×2")
-        dip_txt = f" *({', '.join(dip_tags)})*" if dip_tags else ""
+    # During the event, dips are disabled, so no dip tags
+    dip_txt = ""
 
-        if lvl >= 20:
-            keys = hrs
-            keys_add(guild_id, uid, keys)
-            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp{dip_txt}")
+    # Level 20s get keys instead of XP
+    if lvl >= 20:
+        keys = hrs
+        keys_add(guild_id, uid, keys)
+        lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp")
 
-        elif cap:
-            keys = hrs
-            keys_add(guild_id, uid, keys)
-            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp{dip_txt}")
+    # Capped characters also get keys instead of XP
+    elif cap:
+        keys = hrs
+        keys_add(guild_id, uid, keys)
+        lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp")
 
-        else:
-            xp = xp_per_hour_for_level(lvl) * hrs
-            if xp_dip:
-                xp *= 2
-            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{xp}** xp, **{gp}** gp{dip_txt}")
-
+    # Everyone else gets XP, automatically doubled
+    else:
+        xp = xp_per_hour_for_level(lvl) * hrs * 2
+        lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{xp}** xp, **{gp}** gp")
     if not lines:
         lines = ["*(no participants)*"]
 
