@@ -21,6 +21,10 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN is not set. Add it in Railway → Variables.")
 
+# 400 MEMBER EVENT
+# Set to True during the 48-hour event, then back to False after.
+DOUBLE_RP_EVENT_ACTIVE = True
+
 def db():
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
@@ -151,7 +155,6 @@ def ensure_schema():
                 )
             """)
 
-            # Safe migrations
             cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS guild_id BIGINT")
             cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS run_seconds DOUBLE PRECISION")
             cur.execute("ALTER TABLE participants ADD COLUMN IF NOT EXISTS capped INT DEFAULT 0")
@@ -159,7 +162,6 @@ def ensure_schema():
             cur.execute("ALTER TABLE participants ADD COLUMN IF NOT EXISTS xp_dip INT DEFAULT 0")
             cur.execute("ALTER TABLE participants ADD COLUMN IF NOT EXISTS gp_dip INT DEFAULT 0")
 
-            # Normalize nulls
             cur.execute("UPDATE sessions SET run_seconds = COALESCE(run_seconds, 0) WHERE run_seconds IS NULL")
             cur.execute("UPDATE participants SET seconds = COALESCE(seconds, 0) WHERE seconds IS NULL")
             cur.execute("UPDATE participants SET capped = COALESCE(capped, 0) WHERE capped IS NULL")
@@ -408,10 +410,11 @@ def build_embed(message_id: int) -> discord.Embed:
             tags = []
             if cap:
                 tags.append("Capped")
-            if xp_dip:
-                tags.append("XP DIP")
-            if gp_dip:
-                tags.append("GP DIP")
+            if not DOUBLE_RP_EVENT_ACTIVE:
+                if xp_dip:
+                    tags.append("XP DIP")
+                if gp_dip:
+                    tags.append("GP DIP")
             suffix = f" *({', '.join(tags)})*" if tags else ""
             roster_lines.append(f"<@{uid}> — **{char}** (lvl {lvl}){suffix}")
         roster = "\n".join(roster_lines)
@@ -419,12 +422,15 @@ def build_embed(message_id: int) -> discord.Embed:
         roster = "*No adventurers signed in yet.*"
 
     embed.add_field(name="Roster", value=roster[:1024], inline=False)
-    embed.add_field(
-        name="Reward Rule",
-        value="Earn **1 hour** at **00:45**, **2 hours** at **01:45**, etc.\n"
-              "**XP/hr:** by level bracket • **GP/hr:** level × 10 • **Capped:** 🗝️/hr",
-        inline=False
+
+    reward_rule = (
+        "Earn **1 hour** at **00:45**, **2 hours** at **01:45**, etc.\n"
+        "**XP/hr:** by level bracket • **GP/hr:** level × 10 • **Capped / Level 20:** 🗝️/hr"
     )
+    if DOUBLE_RP_EVENT_ACTIVE:
+        reward_rule += "\n\n🎉 **400 Member Event Active:** RP **XP and GP are automatically doubled**. XP/GP dips are disabled."
+
+    embed.add_field(name="Reward Rule", value=reward_rule, inline=False)
 
     return apply_theme(embed)
 
@@ -451,6 +457,7 @@ def build_rp_status_announcement(action: str, actor: discord.abc.User, message_i
         description=descriptions.get(action, "The status of this RP has changed."),
         color=theme_color()
     )
+
     embed.add_field(name="Status", value=state_label(state), inline=True)
     embed.add_field(name="Session Time", value=f"⏳ **{fmt_hm(elapsed)}**", inline=True)
     embed.add_field(name="Filed By", value=actor.mention, inline=False)
@@ -601,9 +608,14 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
 
         is_capped = self._is_yes(self.capped.value)
 
-        # 400 member event: RP XP/GP are doubled automatically, so dips are disabled
-        has_xp_dip = 0
-        has_gp_dip = 0
+        # Event active: RP XP/GP are doubled automatically, so dips are disabled.
+        if DOUBLE_RP_EVENT_ACTIVE:
+            has_xp_dip = 0
+            has_gp_dip = 0
+        else:
+            has_xp_dip = self._is_yes(self.xp_dip.value)
+            has_gp_dip = self._is_yes(self.gp_dip.value)
+
         now = time.time()
         state, _, _, _, _ = get_session(self.message_id)
 
@@ -642,17 +654,29 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
                     has_gp_dip
                 ))
 
-       tags = []
-       if is_capped:
-          tags.append("Capped: 🗝️/hr")
-       tag_txt = f" *({', '.join(tags)})*" if tags else ""
+        tags = []
+        if is_capped:
+            tags.append("Capped: 🗝️/hr")
+        tag_txt = f" *({', '.join(tags)})*" if tags else ""
 
-       await interaction.response.send_message(
-           f"✅ Signed in: **{cname}** (lvl {lvl}){tag_txt}\n\n"
-           f"🎉 **400 Member Event Active:** RP **XP and GP are automatically doubled**.\n"
-           f"XP/GP dips are disabled during the event.",
-           ephemeral=True
-       )
+        if DOUBLE_RP_EVENT_ACTIVE:
+            await interaction.response.send_message(
+                f"✅ Signed in: **{cname}** (lvl {lvl}){tag_txt}\n\n"
+                f"🎉 **400 Member Event Active:** RP **XP and GP are automatically doubled**.\n"
+                f"XP/GP dips are disabled during the event.",
+                ephemeral=True
+            )
+        else:
+            if has_xp_dip:
+                tags.append("XP DIP")
+            if has_gp_dip:
+                tags.append("GP DIP")
+            tag_txt = f" *({', '.join(tags)})*" if tags else ""
+            await interaction.response.send_message(
+                f"✅ Signed in: **{cname}** (lvl {lvl}){tag_txt}",
+                ephemeral=True
+            )
+
         await update_tracker_message(self.message_id)
 
 # =========================
@@ -761,7 +785,8 @@ class RPView(discord.ui.View):
                 cur.execute("UPDATE participants SET last_tick=%s WHERE message_id=%s", (now, self.message_id))
 
         await interaction.response.send_message("▶️ Session started. The guild clock is running.", ephemeral=True)
-        await post_rp_status_announcement(interaction.channel, "start", interaction.user, self.message_id)
+        if interaction.channel is not None:
+            await post_rp_status_announcement(interaction.channel, "start", interaction.user, self.message_id)
         await update_tracker_message(self.message_id)
 
     async def pause_cb(self, interaction: discord.Interaction):
@@ -781,7 +806,8 @@ class RPView(discord.ui.View):
                 cur.execute("UPDATE participants SET last_tick=NULL WHERE message_id=%s", (self.message_id,))
 
         await interaction.response.send_message("⏸ Session paused. Quills down.", ephemeral=True)
-        await post_rp_status_announcement(interaction.channel, "pause", interaction.user, self.message_id)
+        if interaction.channel is not None:
+            await post_rp_status_announcement(interaction.channel, "pause", interaction.user, self.message_id)
         await update_tracker_message(self.message_id)
 
     async def resume_cb(self, interaction: discord.Interaction):
@@ -799,7 +825,8 @@ class RPView(discord.ui.View):
                 cur.execute("UPDATE participants SET last_tick=%s WHERE message_id=%s", (now, self.message_id))
 
         await interaction.response.send_message("⏵ Session resumed. The guild clock continues.", ephemeral=True)
-        await post_rp_status_announcement(interaction.channel, "resume", interaction.user, self.message_id)
+        if interaction.channel is not None:
+            await post_rp_status_announcement(interaction.channel, "resume", interaction.user, self.message_id)
         await update_tracker_message(self.message_id)
 
     async def end_cb(self, interaction: discord.Interaction):
@@ -813,9 +840,11 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
         await interaction.response.defer(thinking=False)
 
     state, started_at, run_seconds, channel_id, guild_id = get_session(message_id)
-
     if not channel_id or not guild_id:
-        await interaction.followup.send("❌ Could not locate this session.", ephemeral=True)
+        try:
+            await interaction.followup.send("❌ Could not locate this session in the ledger.", ephemeral=True)
+        except Exception:
+            pass
         return
 
     if state == 1 and started_at is not None:
@@ -831,44 +860,62 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
             )
             cur.execute("UPDATE participants SET last_tick=NULL WHERE message_id=%s", (message_id,))
 
+    if interaction.channel is not None:
+        await post_rp_status_announcement(interaction.channel, "end", interaction.user, message_id)
+
     parts = list_participants(message_id)
     start_link = tracker_url(guild_id, channel_id, message_id)
 
-    header = "🏁 **Guild Ledger Closed — Rewards Issued**\n"
+    header = "🏁 **Guild Ledger Closed — Rewards Issued**\nThe registrar tallies the earnings and stamps the record.\n"
     lines = []
 
     for uid, char, lvl, secs, cap, xp_dip, gp_dip in parts:
-    hrs = reward_hours(secs)
+        hrs = reward_hours(secs)
 
-        # 400 member event: RP GP is automatically doubled
-        gp = gp_per_hour_for_level(lvl) * hrs * 2
+        # Event active: RP GP is doubled automatically for everyone.
+        gp = gp_per_hour_for_level(lvl) * hrs
+        if DOUBLE_RP_EVENT_ACTIVE:
+            gp *= 2
+        else:
+            if gp_dip:
+                gp *= 2
 
-        # During the event, dips are disabled, so no dip tags
-        dip_txt = ""
+        dip_tags = []
+        if not DOUBLE_RP_EVENT_ACTIVE:
+            if xp_dip:
+                dip_tags.append("XP×2")
+            if gp_dip:
+                dip_tags.append("GP×2")
+        dip_txt = f" *({', '.join(dip_tags)})*" if dip_tags else ""
 
         # Level 20s get keys instead of XP
         if lvl >= 20:
             keys = hrs
             keys_add(guild_id, uid, keys)
-            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp")
+            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp{dip_txt}")
 
         # Capped characters also get keys instead of XP
         elif cap:
             keys = hrs
             keys_add(guild_id, uid, keys)
-            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp")
+            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp{dip_txt}")
 
-        # Everyone else gets XP, automatically doubled
+        # Everyone else gets XP
         else:
-            xp = xp_per_hour_for_level(lvl) * hrs * 2
-            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{xp}** xp, **{gp}** gp")
+            xp = xp_per_hour_for_level(lvl) * hrs
+            if DOUBLE_RP_EVENT_ACTIVE:
+                xp *= 2
+            else:
+                if xp_dip:
+                    xp *= 2
+            lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{xp}** xp, **{gp}** gp{dip_txt}")
+
     if not lines:
         lines = ["*(no participants)*"]
 
     content = header + "\n".join(lines)
 
     rewards_msg = await interaction.followup.send(content, wait=True)
-
     try:
         end_link = rewards_msg.jump_url
         links_bottom = f"\n\n🔗 **Start:** {start_link}\n🔗 **End:** {end_link}"
@@ -989,6 +1036,7 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
              @player1 char1 lvl1 @player2 char2 lvl2 ...
     """
     try:
+        args = args.replace("“", '"').replace("”", '"').replace("’", "'")
         parts = shlex.split(args)
     except Exception:
         await ctx.send("❌ Could not parse. Make sure your quotes are closed properly.")
@@ -1095,7 +1143,7 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
 async def arcaneexchange_cmd(ctx: commands.Context):
     output_lines = []
 
-    for rarity in reversed(RARITY_ORDER):  # Artifact -> Common
+    for rarity in reversed(RARITY_ORDER):  # Artifact → Common
         pool = LOOT_TABLE.get(rarity, [])
         if not pool:
             items = ["(No items loaded)"]
@@ -1118,7 +1166,7 @@ async def arcaneexchange_cmd(ctx: commands.Context):
 # =========================
 # APPROVE COMMAND: !approve
 # =========================
-ALLOWED_APPROVE_ROLES = {"Stewards", "The Hearth", "DM"}
+ALLOWED_APPROVE_ROLES = {"Stewards", "The Hearth", "Guild Scribe"}
 APPROVE_REMOVE_ROLES = {"Applicant"}
 APPROVE_ADD_ROLES = {"Guild Initiate", "Apprentice (2-4)"}
 GUILD_AMBASSADOR_ROLE_NAME = "Guild Ambassador"
@@ -1240,7 +1288,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: Exceptio
             await interaction.followup.send(msg[:1900], ephemeral=True)
         else:
             await interaction.response.send_message(msg[:1900], ephemeral=True)
-    except Exception:
+    except Exception: we
         pass
 
 # =========================
