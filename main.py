@@ -23,7 +23,7 @@ if not TOKEN:
 
 # 400 MEMBER EVENT
 # Set to True during the 48-hour event, then back to False after.
-DOUBLE_RP_EVENT_ACTIVE = True
+DOUBLE_RP_EVENT_ACTIVE = False
 
 def db():
     database_url = os.getenv("DATABASE_URL")
