@@ -23,7 +23,7 @@ if not TOKEN:
 
 # 400 MEMBER EVENT
 # Set True during the event, False when it ends.
-DOUBLE_RP_EVENT_ACTIVE = True
+DOUBLE_RP_EVENT_ACTIVE = False
 
 
 def db():
