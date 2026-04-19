@@ -22,8 +22,9 @@ if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN is not set. Add it in Railway → Variables.")
 
 # 400 MEMBER EVENT
-# Set to True during the 48-hour event, then back to False after.
-DOUBLE_RP_EVENT_ACTIVE = False
+# Set True during the event, False when it ends.
+DOUBLE_RP_EVENT_ACTIVE = True
+
 
 def db():
     database_url = os.getenv("DATABASE_URL")
@@ -33,14 +34,17 @@ def db():
         )
     return psycopg.connect(database_url)
 
+
 # =========================
 # LOOT LOADING (from repo CSV files)
 # =========================
 RARITY_ORDER = ["Common", "Uncommon", "Rare", "Very Rare", "Legendary", "Artifact"]
 
+
 def _repo_path(filename: str) -> str:
     base = os.getenv("RAILWAY_WORKDIR", "/app")
     return os.path.join(base, filename)
+
 
 def load_loot_csv(path: str) -> List[str]:
     """
@@ -74,13 +78,14 @@ def load_loot_csv(path: str) -> List[str]:
             out.append(it)
     return out
 
+
 LOOT_TABLE: Dict[str, List[str]] = {}
 for rarity in RARITY_ORDER:
     fn = f"Guild Loot List - {rarity}.csv"
-    items = load_loot_csv(_repo_path(fn))
-    LOOT_TABLE[rarity] = items
+    LOOT_TABLE[rarity] = load_loot_csv(_repo_path(fn))
 
 print("Loot loaded:", {k: len(v) for k, v in LOOT_TABLE.items()}, flush=True)
+
 
 def rarity_for_level(level: int) -> str:
     if 2 <= level <= 4:
@@ -93,8 +98,9 @@ def rarity_for_level(level: int) -> str:
         return "Very Rare"
     return "Legendary"
 
+
 def rarity_shift(base: str, roll: int, level: int) -> str:
-    # Artifact ONLY if level 20+ AND roll == 100
+    # Artifact only for level 20+ and a 100 roll
     if level >= 20 and roll == 100:
         return "Artifact"
 
@@ -107,14 +113,16 @@ def rarity_shift(base: str, roll: int, level: int) -> str:
 
     return RARITY_ORDER[idx]
 
+
 def random_loot(rarity: str) -> Optional[str]:
     pool = LOOT_TABLE.get(rarity) or []
     if not pool:
         return None
     return random.choice(pool)
 
+
 # =========================
-# DATABASE + SCHEMA (Postgres)
+# DATABASE + SCHEMA
 # =========================
 def ensure_schema():
     with db() as conn:
@@ -155,6 +163,19 @@ def ensure_schema():
                 )
             """)
 
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS session_events (
+                    id BIGSERIAL PRIMARY KEY,
+                    session_message_id BIGINT,
+                    event_type TEXT,
+                    event_message_id BIGINT,
+                    channel_id BIGINT,
+                    guild_id BIGINT,
+                    created_at DOUBLE PRECISION
+                )
+            """)
+
+            # Safe migrations
             cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS guild_id BIGINT")
             cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS run_seconds DOUBLE PRECISION")
             cur.execute("ALTER TABLE participants ADD COLUMN IF NOT EXISTS capped INT DEFAULT 0")
@@ -162,11 +183,13 @@ def ensure_schema():
             cur.execute("ALTER TABLE participants ADD COLUMN IF NOT EXISTS xp_dip INT DEFAULT 0")
             cur.execute("ALTER TABLE participants ADD COLUMN IF NOT EXISTS gp_dip INT DEFAULT 0")
 
+            # Normalize nulls
             cur.execute("UPDATE sessions SET run_seconds = COALESCE(run_seconds, 0) WHERE run_seconds IS NULL")
             cur.execute("UPDATE participants SET seconds = COALESCE(seconds, 0) WHERE seconds IS NULL")
             cur.execute("UPDATE participants SET capped = COALESCE(capped, 0) WHERE capped IS NULL")
             cur.execute("UPDATE participants SET xp_dip = COALESCE(xp_dip, 0) WHERE xp_dip IS NULL")
             cur.execute("UPDATE participants SET gp_dip = COALESCE(gp_dip, 0) WHERE gp_dip IS NULL")
+
 
 ensure_schema()
 
@@ -175,6 +198,7 @@ ensure_schema()
 # =========================
 def reward_hours(seconds: float) -> int:
     return int((max(0.0, seconds) + 900) // 3600)
+
 
 def xp_per_hour_for_level(level: int) -> int:
     if 2 <= level <= 4:
@@ -189,27 +213,31 @@ def xp_per_hour_for_level(level: int) -> int:
         return 1200
     return 0
 
+
 def gp_per_hour_for_level(level: int) -> int:
     return max(0, int(level)) * 10
 
+
 # =========================
-# QUEST REWARD TABLE (min/max)
+# QUEST REWARD TABLE
 # =========================
 QUEST_XP: Dict[int, Tuple[int, int]] = {
-    2:(600,1200), 3:(600,1200), 4:(600,1200),
-    5:(1200,2400), 6:(1200,2400), 7:(1200,2400), 8:(1200,2400),
-    9:(1600,3200), 10:(1600,3200), 11:(1600,3200), 12:(1600,3200),
-    13:(2000,4000), 14:(2000,4000), 15:(2000,4000), 16:(2000,4000),
-    17:(2400,4800), 18:(2400,4800), 19:(2400,4800),
+    2: (600, 1200), 3: (600, 1200), 4: (600, 1200),
+    5: (1200, 2400), 6: (1200, 2400), 7: (1200, 2400), 8: (1200, 2400),
+    9: (1600, 3200), 10: (1600, 3200), 11: (1600, 3200), 12: (1600, 3200),
+    13: (2000, 4000), 14: (2000, 4000), 15: (2000, 4000), 16: (2000, 4000),
+    17: (2400, 4800), 18: (2400, 4800), 19: (2400, 4800),
 }
+
 QUEST_GP: Dict[int, Tuple[int, int]] = {
-    2:(100,200), 3:(150,300), 4:(200,400),
-    5:(250,500), 6:(300,600), 7:(350,700), 8:(400,800),
-    9:(450,900), 10:(500,1000), 11:(550,1100), 12:(600,1200),
-    13:(650,1300), 14:(700,1400), 15:(750,1500), 16:(800,1600),
-    17:(850,1700), 18:(900,1800), 19:(950,1900),
-    20:(1000,2000),
+    2: (100, 200), 3: (150, 300), 4: (200, 400),
+    5: (250, 500), 6: (300, 600), 7: (350, 700), 8: (400, 800),
+    9: (450, 900), 10: (500, 1000), 11: (550, 1100), 12: (600, 1200),
+    13: (650, 1300), 14: (700, 1400), 15: (750, 1500), 16: (800, 1600),
+    17: (850, 1700), 18: (900, 1800), 19: (950, 1900),
+    20: (1000, 2000),
 }
+
 
 # =========================
 # THEME
@@ -220,6 +248,7 @@ def theme_color() -> discord.Color:
         return discord.Color(int(raw, 16))
     except Exception:
         return discord.Color.gold()
+
 
 def apply_theme(embed: discord.Embed, *, footer_text_override: Optional[str] = None) -> discord.Embed:
     embed.color = theme_color()
@@ -248,6 +277,7 @@ def apply_theme(embed: discord.Embed, *, footer_text_override: Optional[str] = N
 
     return embed
 
+
 # =========================
 # BOT SETUP
 # =========================
@@ -256,14 +286,17 @@ intents.guilds = True
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+
 # =========================
-# KEEPALIVE WEB SERVER (Railway)
+# KEEPALIVE WEB SERVER
 # =========================
 async def handle_root(_: web.Request) -> web.Response:
     return web.Response(text="RP Tracker is running.")
 
+
 async def handle_health(_: web.Request) -> web.Response:
     return web.Response(text="ok")
+
 
 async def start_web_server():
     port = int(os.getenv("PORT", "8080"))
@@ -277,8 +310,9 @@ async def start_web_server():
     await site.start()
     print(f"Web server listening on 0.0.0.0:{port}", flush=True)
 
+
 # =========================
-# KEY LEDGER HELPERS
+# KEY HELPERS
 # =========================
 def keys_get(guild_id: int, user_id: int) -> Tuple[int, int]:
     with db() as conn:
@@ -288,6 +322,7 @@ def keys_get(guild_id: int, user_id: int) -> Tuple[int, int]:
     if not row:
         return (0, 0)
     return (int(row[0] or 0), int(row[1] or 0))
+
 
 def keys_add(guild_id: int, user_id: int, amount: int):
     amount = int(amount)
@@ -303,6 +338,7 @@ def keys_add(guild_id: int, user_id: int, amount: int):
                     current = keys.current + EXCLUDED.current,
                     lifetime = keys.lifetime + EXCLUDED.lifetime
             """, (guild_id, user_id, amount, amount))
+
 
 def keys_sub(guild_id: int, user_id: int, amount: int):
     amount = int(amount)
@@ -321,9 +357,13 @@ def keys_sub(guild_id: int, user_id: int, amount: int):
                 WHERE guild_id=%s AND user_id=%s
             """, (amount, guild_id, user_id))
 
+
 def build_key_embed(member: discord.Member, current: int, lifetime: int) -> discord.Embed:
-    title = f"🗝️ {member.display_name}'s Keyring"
-    embed = discord.Embed(title=title, description="", color=theme_color())
+    embed = discord.Embed(
+        title=f"🗝️ {member.display_name}'s Keyring",
+        description="",
+        color=theme_color()
+    )
     embed.add_field(name="Current Keys", value=str(current), inline=False)
     embed.add_field(name="Lifetime Keys", value=str(lifetime), inline=False)
 
@@ -333,8 +373,56 @@ def build_key_embed(member: discord.Member, current: int, lifetime: int) -> disc
 
     return apply_theme(embed, footer_text_override="Stamped & filed by the Guild Registrar")
 
+
 # =========================
-# HELPERS (SESSIONS)
+# SESSION EVENT HELPERS
+# =========================
+def log_session_event(
+    session_message_id: int,
+    event_type: str,
+    event_message_id: int,
+    channel_id: int,
+    guild_id: int
+):
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO session_events
+                    (session_message_id, event_type, event_message_id, channel_id, guild_id, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (
+                session_message_id,
+                event_type,
+                event_message_id,
+                channel_id,
+                guild_id,
+                time.time()
+            ))
+
+
+def get_session_events(session_message_id: int) -> List[Tuple[str, int, int, int]]:
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT event_type, event_message_id, channel_id, guild_id
+                FROM session_events
+                WHERE session_message_id=%s
+                ORDER BY created_at ASC, id ASC
+            """, (session_message_id,))
+            rows = cur.fetchall()
+
+    return [
+        (str(event_type), int(event_message_id), int(channel_id), int(guild_id))
+        for event_type, event_message_id, channel_id, guild_id in rows
+    ]
+
+
+def build_jump_link(guild_id: int, channel_id: int, message_id: int) -> str:
+    return f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}"
+
+
+# =========================
+# SESSION HELPERS
 # =========================
 def get_session(message_id: int) -> Tuple[int, Optional[float], float, Optional[int], Optional[int]]:
     with db() as conn:
@@ -355,6 +443,7 @@ def get_session(message_id: int) -> Tuple[int, Optional[float], float, Optional[
     guild_id = int(row[4]) if row[4] is not None else None
     return state, started_at, run_seconds, channel_id, guild_id
 
+
 def list_participants(message_id: int) -> List[Tuple[int, str, int, float, int, int, int]]:
     with db() as conn:
         with conn.cursor() as cur:
@@ -367,7 +456,11 @@ def list_participants(message_id: int) -> List[Tuple[int, str, int, float, int, 
             """, (message_id,))
             rows = cur.fetchall()
 
-    return [(int(uid), str(ch), int(lvl), float(secs), int(cap), int(xd), int(gd)) for (uid, ch, lvl, secs, cap, xd, gd) in rows]
+    return [
+        (int(uid), str(ch), int(lvl), float(secs), int(cap), int(xd), int(gd))
+        for (uid, ch, lvl, secs, cap, xd, gd) in rows
+    ]
+
 
 def session_elapsed_seconds(message_id: int) -> float:
     state, started_at, run_seconds, _, _ = get_session(message_id)
@@ -375,11 +468,13 @@ def session_elapsed_seconds(message_id: int) -> float:
         return run_seconds + max(0.0, time.time() - started_at)
     return run_seconds
 
+
 def fmt_hm(seconds: float) -> str:
     seconds = max(0.0, seconds)
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     return f"{h}h {m}m"
+
 
 def state_label(state: int) -> str:
     if state == 1:
@@ -388,8 +483,10 @@ def state_label(state: int) -> str:
         return "🟡 Paused"
     return "⚪ Not Started"
 
+
 def tracker_url(guild_id: int, channel_id: int, message_id: int) -> str:
     return f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}"
+
 
 def build_embed(message_id: int) -> discord.Embed:
     state, _, _, _, _ = get_session(message_id)
@@ -434,6 +531,7 @@ def build_embed(message_id: int) -> discord.Embed:
 
     return apply_theme(embed)
 
+
 def build_rp_status_announcement(action: str, actor: discord.abc.User, message_id: int) -> discord.Embed:
     state, _, _, _, _ = get_session(message_id)
     elapsed = session_elapsed_seconds(message_id)
@@ -464,13 +562,37 @@ def build_rp_status_announcement(action: str, actor: discord.abc.User, message_i
 
     return apply_theme(embed, footer_text_override="Filed in the Guild Ledger")
 
-async def post_rp_status_announcement(channel: discord.abc.Messageable, action: str, actor: discord.abc.User, message_id: int):
+
+async def post_rp_status_announcement(
+    channel: discord.abc.Messageable,
+    action: str,
+    actor: discord.abc.User,
+    session_message_id: int
+):
     try:
-        embed = build_rp_status_announcement(action, actor, message_id)
-        await channel.send(embed=embed)
+        embed = build_rp_status_announcement(action, actor, session_message_id)
+        msg = await channel.send(embed=embed)
+
+        guild = getattr(channel, "guild", None)
+        channel_id = getattr(channel, "id", None)
+        guild_id = getattr(guild, "id", None)
+
+        if channel_id is not None and guild_id is not None:
+            log_session_event(
+                session_message_id=session_message_id,
+                event_type=action,
+                event_message_id=msg.id,
+                channel_id=channel_id,
+                guild_id=guild_id
+            )
+
+        return msg
+
     except Exception:
-        print(f"Failed to post RP status announcement: action={action}, message_id={message_id}", flush=True)
+        print("Failed to post RP status announcement", flush=True)
         traceback.print_exc()
+        return None
+
 
 async def update_tracker_message(message_id: int):
     _, _, _, channel_id, _ = get_session(message_id)
@@ -497,7 +619,6 @@ async def update_tracker_message(message_id: int):
     try:
         await msg.edit(embed=build_embed(message_id), view=view)
         bot.add_view(view)
-
     except discord.HTTPException as e:
         if getattr(e, "code", None) == 50083:
             return
@@ -505,11 +626,9 @@ async def update_tracker_message(message_id: int):
             print(f"Skipping temporary Discord API error while updating tracker {message_id}: {e}", flush=True)
             return
         raise
-
     except discord.DiscordServerError as e:
         print(f"Skipping temporary Discord server error while updating tracker {message_id}: {e}", flush=True)
         return
-
     except Exception as e:
         err_text = str(e).lower()
         transient_markers = (
@@ -524,6 +643,7 @@ async def update_tracker_message(message_id: int):
             print(f"Skipping temporary network error while updating tracker {message_id}: {e}", flush=True)
             return
         raise
+
 
 # =========================
 # TIME TICKER
@@ -552,6 +672,7 @@ def tick_running_sessions():
                         WHERE message_id=%s AND user_id=%s
                     """, (new_secs, now, mid, int(uid)))
 
+
 async def ticker_loop():
     while True:
         try:
@@ -568,12 +689,12 @@ async def ticker_loop():
                 except Exception:
                     print(f"Ticker update failed for message_id={mid}", flush=True)
                     traceback.print_exc()
-
         except Exception:
             print("Ticker loop error:", flush=True)
             traceback.print_exc()
 
         await asyncio.sleep(15)
+
 
 # =========================
 # JOIN MODAL
@@ -608,7 +729,7 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
 
         is_capped = self._is_yes(self.capped.value)
 
-        # Event active: RP XP/GP are doubled automatically, so dips are disabled.
+        # Event active: RP XP/GP are auto doubled, dips disabled
         if DOUBLE_RP_EVENT_ACTIVE:
             has_xp_dip = 0
             has_gp_dip = 0
@@ -679,8 +800,9 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
 
         await update_tracker_message(self.message_id)
 
+
 # =========================
-# VIEW (buttons)
+# VIEW
 # =========================
 class RPView(discord.ui.View):
     def __init__(self, message_id: int):
@@ -705,7 +827,15 @@ class RPView(discord.ui.View):
         self.resume_btn.callback = self.resume_cb
         self.end_btn.callback = self.end_cb
 
-        for b in (self.join_btn, self.leave_btn, self.rejoin_btn, self.start_btn, self.pause_btn, self.resume_btn, self.end_btn):
+        for b in (
+            self.join_btn,
+            self.leave_btn,
+            self.rejoin_btn,
+            self.start_btn,
+            self.pause_btn,
+            self.resume_btn,
+            self.end_btn,
+        ):
             self.add_item(b)
 
     async def join_cb(self, interaction: discord.Interaction):
@@ -832,8 +962,9 @@ class RPView(discord.ui.View):
     async def end_cb(self, interaction: discord.Interaction):
         await end_session_and_post_rewards(interaction, self.message_id)
 
+
 # =========================
-# END SESSION CORE (RP)
+# END SESSION CORE
 # =========================
 async def end_session_and_post_rewards(interaction: discord.Interaction, message_id: int):
     if not interaction.response.is_done():
@@ -864,7 +995,6 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
         await post_rp_status_announcement(interaction.channel, "end", interaction.user, message_id)
 
     parts = list_participants(message_id)
-    start_link = tracker_url(guild_id, channel_id, message_id)
 
     header = "🏁 **Guild Ledger Closed — Rewards Issued**\nThe registrar tallies the earnings and stamps the record.\n"
     lines = []
@@ -872,13 +1002,11 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
     for uid, char, lvl, secs, cap, xp_dip, gp_dip in parts:
         hrs = reward_hours(secs)
 
-        # Event active: RP GP is doubled automatically for everyone.
         gp = gp_per_hour_for_level(lvl) * hrs
         if DOUBLE_RP_EVENT_ACTIVE:
             gp *= 2
-        else:
-            if gp_dip:
-                gp *= 2
+        elif gp_dip:
+            gp *= 2
 
         dip_tags = []
         if not DOUBLE_RP_EVENT_ACTIVE:
@@ -888,42 +1016,67 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
                 dip_tags.append("GP×2")
         dip_txt = f" *({', '.join(dip_tags)})*" if dip_tags else ""
 
-        # Level 20s get keys instead of XP
+        # Level 20 gets 1 key per hour instead of XP
         if lvl >= 20:
             keys = hrs
             keys_add(guild_id, uid, keys)
             lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp{dip_txt}")
 
-        # Capped characters also get keys instead of XP
         elif cap:
             keys = hrs
             keys_add(guild_id, uid, keys)
             lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp{dip_txt}")
 
-        # Everyone else gets XP
         else:
             xp = xp_per_hour_for_level(lvl) * hrs
             if DOUBLE_RP_EVENT_ACTIVE:
                 xp *= 2
-            else:
-                if xp_dip:
-                    xp *= 2
+            elif xp_dip:
+                xp *= 2
             lines.append(f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{xp}** xp, **{gp}** gp{dip_txt}")
 
     if not lines:
         lines = ["*(no participants)*"]
 
     content = header + "\n".join(lines)
-
     rewards_msg = await interaction.followup.send(content, wait=True)
+
     try:
-        end_link = rewards_msg.jump_url
-        links_bottom = f"\n\n🔗 **Start:** {start_link}\n🔗 **End:** {end_link}"
+        events = get_session_events(message_id)
+
+        start_link = tracker_url(guild_id, channel_id, message_id)
+        end_link = None
+        mid_links: List[str] = []
+
+        for event_type, event_message_id, ev_channel_id, ev_guild_id in events:
+            jump = build_jump_link(ev_guild_id, ev_channel_id, event_message_id)
+
+            if event_type == "start":
+                start_link = jump
+            elif event_type == "end":
+                end_link = jump
+            elif event_type == "pause":
+                mid_links.append(f"Pause: {jump}")
+            elif event_type == "resume":
+                mid_links.append(f"Resume: {jump}")
+
+        if end_link is None:
+            end_link = rewards_msg.jump_url
+
+        link_lines = [f"Start: {start_link}", ""]
+        link_lines.extend(mid_links)
+        if mid_links:
+            link_lines.append("")
+        link_lines.append(f"End: {end_link}")
+
+        links_bottom = "\n\n" + "\n".join(link_lines)
         await rewards_msg.edit(content=rewards_msg.content + links_bottom)
+
     except Exception:
         pass
 
     await update_tracker_message(message_id)
+
 
 # =========================
 # SLASH COMMANDS (RP)
@@ -957,6 +1110,7 @@ async def rpbegin(interaction: discord.Interaction):
     except Exception:
         pass
 
+
 @bot.tree.command(name="rpend", description="End the active RP session in this channel/thread.")
 async def rpend(interaction: discord.Interaction):
     await interaction.response.defer(thinking=False)
@@ -976,8 +1130,8 @@ async def rpend(interaction: discord.Interaction):
         await interaction.followup.send("❌ No active tracker found in this channel.", ephemeral=True)
         return
 
-    message_id = int(row[0])
-    await end_session_and_post_rewards(interaction, message_id)
+    await end_session_and_post_rewards(interaction, int(row[0]))
+
 
 # =========================
 # PREFIX COMMAND: !key
@@ -1015,6 +1169,7 @@ async def key_cmd(ctx: commands.Context, amount: Optional[str] = None, *, reason
     await ctx.send(ledger_text)
     await ctx.send(embed=build_key_embed(ctx.author, current, lifetime))
 
+
 # =========================
 # QUEST RECORDS: !qrecords
 # =========================
@@ -1028,13 +1183,9 @@ def parse_user_id(token: str) -> Optional[int]:
         return int(t)
     return None
 
+
 @bot.command(name="qrecords")
 async def qrecords_cmd(ctx: commands.Context, *, args: str):
-    """
-    Usage:
-    !qrecords "Quest Name" "Quest Description" "Difficulty" "xp-min/xp-max" "gp-min/gp-max" "loot/none"
-             @player1 char1 lvl1 @player2 char2 lvl2 ...
-    """
     try:
         args = args.replace("“", '"').replace("”", '"').replace("’", "'")
         parts = shlex.split(args)
@@ -1059,7 +1210,7 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
 
     lines: List[str] = []
     for i in range(0, len(rest), 3):
-        user_tok, char, lvl_tok = rest[i:i+3]
+        user_tok, char, lvl_tok = rest[i:i + 3]
 
         uid = parse_user_id(user_tok)
         if uid is None:
@@ -1111,7 +1262,7 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
         else:
             reward_str = f"{xp} xp, {gp} gp"
 
-        reward_bits = f"{reward_str}"
+        reward_bits = reward_str
         if do_loot:
             reward_bits += f", {loot_txt}, (Grandmaster rolled: {gm_roll})"
         else:
@@ -1136,19 +1287,36 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
 
     await ctx.send(out)
 
+
 # =========================
 # ARCANE EXCHANGE: !arcaneexchange
 # =========================
 @bot.command(name="arcaneexchange")
 async def arcaneexchange_cmd(ctx: commands.Context):
+    """
+    Generates random items for the Arcane Exchange.
+    6 each: Common, Uncommon, Rare, Very Rare
+    4: Legendary
+    No Artifacts
+    """
+
+    rarity_counts = {
+        "Legendary": 4,
+        "Very Rare": 6,
+        "Rare": 6,
+        "Uncommon": 6,
+        "Common": 6,
+    }
+
     output_lines = []
 
-    for rarity in reversed(RARITY_ORDER):  # Artifact → Common
+    for rarity in ["Legendary", "Very Rare", "Rare", "Uncommon", "Common"]:
         pool = LOOT_TABLE.get(rarity, [])
+
         if not pool:
             items = ["(No items loaded)"]
         else:
-            count = min(4, len(pool))
+            count = min(rarity_counts[rarity], len(pool))
             items = random.sample(pool, count)
 
         section = [f"**__{rarity}__**"]
@@ -1163,6 +1331,7 @@ async def arcaneexchange_cmd(ctx: commands.Context):
 
     await ctx.send(final_output)
 
+
 # =========================
 # APPROVE COMMAND: !approve
 # =========================
@@ -1170,6 +1339,7 @@ ALLOWED_APPROVE_ROLES = {"Stewards", "The Hearth", "Guild Scribe"}
 APPROVE_REMOVE_ROLES = {"Applicant"}
 APPROVE_ADD_ROLES = {"Guild Initiate", "Apprentice (2-4)"}
 GUILD_AMBASSADOR_ROLE_NAME = "Guild Ambassador"
+
 
 @bot.command(name="approve")
 async def approve_cmd(ctx: commands.Context, member: Optional[discord.Member] = None):
@@ -1271,6 +1441,7 @@ async def approve_cmd(ctx: commands.Context, member: Optional[discord.Member] = 
 
     await ctx.send(embed=embed)
 
+
 # =========================
 # ERROR HANDLER
 # =========================
@@ -1293,7 +1464,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: Exceptio
 
 
 # =========================
-# ERROR HANDLER (PREFIX COMMANDS)
+# ERROR HANDLER (PREFIX)
 # =========================
 @bot.event
 async def on_command_error(ctx: commands.Context, error: Exception):
@@ -1311,6 +1482,8 @@ async def on_command_error(ctx: commands.Context, error: Exception):
     print("Prefix command error:", repr(error), flush=True)
     traceback.print_exception(type(error), error, error.__traceback__)
     await ctx.send(f"❌ Command error: `{type(error).__name__}` — {error}")
+
+
 # =========================
 # READY
 # =========================
@@ -1341,6 +1514,7 @@ async def main():
     await start_web_server()
     asyncio.create_task(ticker_loop())
     await bot.start(TOKEN)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
