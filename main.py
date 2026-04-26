@@ -1335,7 +1335,7 @@ async def arcaneexchange_cmd(ctx: commands.Context):
 # =========================
 # APPROVE COMMAND: !approve
 # =========================
-ALLOWED_APPROVE_ROLES = {"Stewards", "The Hearth", "Guild Scribe"}
+ALLOWED_APPROVE_ROLES = {"Stewards", "The Hearth", "DM"}
 APPROVE_REMOVE_ROLES = {"Applicant"}
 APPROVE_ADD_ROLES = {"Guild Initiate", "Apprentice (2-4)"}
 GUILD_AMBASSADOR_ROLE_NAME = "Guild Ambassador"
