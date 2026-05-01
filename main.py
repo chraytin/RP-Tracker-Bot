@@ -64,7 +64,7 @@ def load_loot_csv(path: str) -> List[str]:
             if not name:
                 continue
             low = name.lower()
-            if low in ("item", "items"):
+            if low in ("item", "items", "name"):
                 continue
             if "minimum trade value" in low:
                 continue
