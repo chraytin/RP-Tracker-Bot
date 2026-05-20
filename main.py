@@ -675,7 +675,10 @@ def tick_running_sessions():
                 cur.execute("""
                     SELECT user_id, last_tick, seconds
                     FROM participants
-                    WHERE message_id=%s AND last_tick IS NOT NULL AND present=1
+                    WHERE message_id=%s
+                      AND present=1
+                      AND last_tick IS NOT NULL
+                      AND last_tick >= 0
                 """, (mid,))
                 rows = cur.fetchall()
 
@@ -879,7 +882,7 @@ class RPView(discord.ui.View):
 
                 last_tick, secs = row[0], float(row[1] or 0.0)
 
-                if last_tick is not None:
+                if last_tick is not None and float(last_tick) >= 0:
                     secs += max(0.0, now - float(last_tick))
 
                 cur.execute("""
@@ -888,7 +891,7 @@ class RPView(discord.ui.View):
                     WHERE message_id=%s AND user_id=%s
                 """, (secs, self.message_id, interaction.user.id))
 
-        await interaction.response.send_message("⏹ You’ve left (timer paused for you only).", ephemeral=True)
+        await interaction.response.send_message("⏹ You’ve left. Your personal RP timer is stopped.", ephemeral=True)
         await update_tracker_message(self.message_id)
 
     async def rejoin_cb(self, interaction: discord.Interaction):
@@ -992,8 +995,10 @@ class RPView(discord.ui.View):
 
                 cur.execute("""
                     UPDATE participants
-                    SET last_tick=NULL
-                    WHERE message_id=%s AND present=1
+                    SET last_tick=-1
+                    WHERE message_id=%s
+                      AND present=1
+                      AND last_tick IS NOT NULL
                 """, (self.message_id,))
 
         await interaction.response.send_message("⏸ Session paused. Quills down.", ephemeral=True)
@@ -1023,7 +1028,9 @@ class RPView(discord.ui.View):
                 cur.execute("""
                     UPDATE participants
                     SET last_tick=%s
-                    WHERE message_id=%s AND present=1
+                    WHERE message_id=%s
+                      AND present=1
+                      AND last_tick=-1
                 """, (now, self.message_id))
 
         await interaction.response.send_message("⏵ Session resumed. The guild clock continues.", ephemeral=True)
@@ -1264,6 +1271,75 @@ async def key_cmd(ctx: commands.Context, amount: Optional[str] = None, *, reason
 
     await ctx.send(ledger_text)
     await ctx.send(embed=build_key_embed(ctx.author, current, lifetime))
+
+
+# =========================
+# STAFF PAYDAY: !payday
+# =========================
+PAYDAY_ALLOWED_ROLES = {"The Hearth"}
+
+PAYDAY_STAFF_ROLES = {
+    "Guild Ambassador": 5,
+    "Stewards": 5,
+    "The Hearth": 5,
+}
+
+
+@bot.command(name="payday")
+async def payday_cmd(ctx: commands.Context):
+    if ctx.guild is None:
+        await ctx.send("❌ This command can only be used in a server.")
+        return
+
+    author_roles = {role.name for role in ctx.author.roles}
+    if not (author_roles & PAYDAY_ALLOWED_ROLES):
+        await ctx.send("❌ Only The Hearth may run staff payday.")
+        return
+
+    paid_users = {}
+
+    for role_name, amount in PAYDAY_STAFF_ROLES.items():
+        role = discord.utils.get(ctx.guild.roles, name=role_name)
+        if role is None:
+            continue
+
+        for member in role.members:
+            if member.bot:
+                continue
+
+            if member.id not in paid_users:
+                paid_users[member.id] = {
+                    "member": member,
+                    "amount": 0,
+                    "roles": []
+                }
+
+            paid_users[member.id]["amount"] += amount
+            paid_users[member.id]["roles"].append(role_name)
+
+    if not paid_users:
+        await ctx.send("❌ No eligible staff found.")
+        return
+
+    for data in paid_users.values():
+        keys_add(ctx.guild.id, data["member"].id, data["amount"])
+
+    lines = [
+        f"{data['member'].mention} — **+{data['amount']}** 🗝️ *({', '.join(data['roles'])})*"
+        for data in paid_users.values()
+    ]
+
+    out = (
+        "🗝️ **Staff Payday Issued**\n"
+        "The Guild Registrar has paid eligible staff.\n\n"
+        + "\n".join(lines)
+    )
+
+    if len(out) > 1900:
+        await ctx.send("🗝️ **Staff Payday Issued**\nEligible staff were paid, but the list was too long to display.")
+        return
+
+    await ctx.send(out)
 
 
 # =========================
