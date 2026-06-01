@@ -284,6 +284,7 @@ def apply_theme(embed: discord.Embed, *, footer_text_override: Optional[str] = N
 # =========================
 intents = discord.Intents.default()
 intents.guilds = True
+intents.members = True
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -1284,7 +1285,6 @@ PAYDAY_STAFF_ROLES = {
     "The Hearth": 5,
 }
 
-
 @bot.command(name="payday")
 async def payday_cmd(ctx: commands.Context):
     if ctx.guild is None:
@@ -1298,27 +1298,31 @@ async def payday_cmd(ctx: commands.Context):
 
     paid_users = {}
 
-    for role_name, amount in PAYDAY_STAFF_ROLES.items():
-        role = discord.utils.get(ctx.guild.roles, name=role_name)
-        if role is None:
+    async for member in ctx.guild.fetch_members(limit=None):
+        if member.bot:
             continue
 
-        for member in role.members:
-            if member.bot:
-                continue
+        member_role_names = {role.name for role in member.roles}
 
-            if member.id not in paid_users:
-                paid_users[member.id] = {
-                    "member": member,
-                    "amount": 0,
-                    "roles": []
-                }
+        amount = 0
+        matched_roles = []
 
-            paid_users[member.id]["amount"] += amount
-            paid_users[member.id]["roles"].append(role_name)
+        for role_name, role_amount in PAYDAY_STAFF_ROLES.items():
+            if role_name in member_role_names:
+                amount += role_amount
+                matched_roles.append(role_name)
+
+        if amount > 0:
+            paid_users[member.id] = {
+                "member": member,
+                "amount": amount,
+                "roles": matched_roles
+            }
 
     if not paid_users:
-        await ctx.send("❌ No eligible staff found.")
+        await ctx.send(
+            "❌ No eligible staff found. Make sure the bot has **Server Members Intent** enabled in the Discord Developer Portal."
+        )
         return
 
     for data in paid_users.values():
@@ -1336,7 +1340,10 @@ async def payday_cmd(ctx: commands.Context):
     )
 
     if len(out) > 1900:
-        await ctx.send("🗝️ **Staff Payday Issued**\nEligible staff were paid, but the list was too long to display.")
+        await ctx.send(
+            f"🗝️ **Staff Payday Issued**\n"
+            f"Paid **{len(paid_users)}** eligible staff, but the list was too long to display."
+        )
         return
 
     await ctx.send(out)
