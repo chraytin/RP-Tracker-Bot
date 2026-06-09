@@ -1056,7 +1056,10 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
 
     if not channel_id or not guild_id:
         try:
-            await interaction.followup.send("❌ Could not locate this session in the ledger.", ephemeral=True)
+            await interaction.followup.send(
+                "❌ Could not locate this session in the ledger.",
+                ephemeral=True
+            )
         except Exception:
             pass
         return
@@ -1081,23 +1084,34 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
             """, (message_id,))
 
     if interaction.channel is not None:
-        await post_rp_status_announcement(interaction.channel, "end", interaction.user, message_id)
+        await post_rp_status_announcement(
+            interaction.channel,
+            "end",
+            interaction.user,
+            message_id
+        )
 
     parts = list_participants(message_id)
 
-    header = "🏁 **Guild Ledger Closed — Rewards Issued**\nThe registrar tallies the earnings and stamps the record.\n"
+    header = (
+        "🏁 **Guild Ledger Closed — Rewards Issued**\n"
+        "The registrar tallies the earnings and stamps the record.\n"
+    )
+
     lines = []
 
     for uid, char, lvl, secs, cap, xp_dip, gp_dip in parts:
         hrs = reward_hours(secs)
 
         gp = gp_per_hour_for_level(lvl) * hrs
+
         if DOUBLE_RP_EVENT_ACTIVE:
             gp *= 2
         elif gp_dip:
             gp *= 2
 
         dip_tags = []
+
         if not DOUBLE_RP_EVENT_ACTIVE:
             if xp_dip:
                 dip_tags.append("XP×2")
@@ -1109,57 +1123,114 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
         if lvl >= 20:
             keys = hrs
             keys_add(guild_id, uid, keys)
+
             lines.append(
-                f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp{dip_txt}"
+                f"<@{uid}> — **{char}** (lvl {lvl}) — "
+                f"**{hrs}h** — **{keys}** 🗝️, **{gp}** gp{dip_txt}"
             )
 
         elif cap:
             keys = hrs
             keys_add(guild_id, uid, keys)
+
             lines.append(
-                f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{keys}** 🗝️, **{gp}** gp{dip_txt}"
+                f"<@{uid}> — **{char}** (lvl {lvl}) — "
+                f"**{hrs}h** — **{keys}** 🗝️, **{gp}** gp{dip_txt}"
             )
 
         else:
             xp = xp_per_hour_for_level(lvl) * hrs
+
             if DOUBLE_RP_EVENT_ACTIVE:
                 xp *= 2
             elif xp_dip:
                 xp *= 2
 
             lines.append(
-                f"<@{uid}> — **{char}** (lvl {lvl}) — **{hrs}h** — **{xp}** xp, **{gp}** gp{dip_txt}"
+                f"<@{uid}> — **{char}** (lvl {lvl}) — "
+                f"**{hrs}h** — **{xp}** xp, **{gp}** gp{dip_txt}"
             )
+
+        # =====================================
+        # First RP Completed -> Remove Fresh Adventurer
+        # =====================================
+        if hrs > 0:
+            try:
+                guild = interaction.guild
+
+                if guild is not None:
+                    member = guild.get_member(uid)
+
+                    if member is None:
+                        member = await guild.fetch_member(uid)
+
+                    fresh_role = discord.utils.get(
+                        guild.roles,
+                        name=FRESH_ADVENTURER_ROLE_NAME
+                    )
+
+                    if (
+                        member is not None
+                        and fresh_role is not None
+                        and fresh_role in member.roles
+                    ):
+                        await member.remove_roles(
+                            fresh_role,
+                            reason="Completed first RP session"
+                        )
+
+            except Exception:
+                traceback.print_exc()
 
     if not lines:
         lines = ["*(no participants)*"]
 
     content = header + "\n".join(lines)
-    rewards_msg = await interaction.followup.send(content, wait=True)
+
+    rewards_msg = await interaction.followup.send(
+        content,
+        wait=True
+    )
 
     try:
         events = get_session_events(message_id)
 
-        start_link = tracker_url(guild_id, channel_id, message_id)
+        start_link = tracker_url(
+            guild_id,
+            channel_id,
+            message_id
+        )
+
         end_link = None
         mid_links: List[str] = []
 
         for event_type, event_message_id, ev_channel_id, ev_guild_id in events:
-            jump = build_jump_link(ev_guild_id, ev_channel_id, event_message_id)
+            jump = build_jump_link(
+                ev_guild_id,
+                ev_channel_id,
+                event_message_id
+            )
 
             if event_type == "start":
                 start_link = jump
+
             elif event_type == "end":
                 end_link = jump
+
             elif event_type == "pause":
                 mid_links.append(f"Pause: {jump}")
+
             elif event_type == "resume":
                 mid_links.append(f"Resume: {jump}")
 
         if end_link is None:
             end_link = rewards_msg.jump_url
 
-        link_lines = [f"Start: {start_link}", ""]
+        link_lines = [
+            f"Start: {start_link}",
+            ""
+        ]
+
         link_lines.extend(mid_links)
 
         if mid_links:
@@ -1168,7 +1239,10 @@ async def end_session_and_post_rewards(interaction: discord.Interaction, message
         link_lines.append(f"End: {end_link}")
 
         links_bottom = "\n\n" + "\n".join(link_lines)
-        await rewards_msg.edit(content=rewards_msg.content + links_bottom)
+
+        await rewards_msg.edit(
+            content=rewards_msg.content + links_bottom
+        )
 
     except Exception:
         pass
@@ -1517,9 +1591,9 @@ async def arcaneexchange_cmd(ctx: commands.Context):
 # =========================
 ALLOWED_APPROVE_ROLES = {"Stewards", "The Hearth", "DM"}
 APPROVE_REMOVE_ROLES = {"Applicant"}
-APPROVE_ADD_ROLES = {"Guild Initiate", "Apprentice (2-4)"}
+APPROVE_ADD_ROLES = {"Guild Initiate", "Apprentice (2-4)", "Fresh Adventurer"}
 GUILD_AMBASSADOR_ROLE_NAME = "Guild Ambassador"
-
+FRESH_ADVENTURER_ROLE_NAME = "Fresh Adventurer"
 
 @bot.command(name="approve")
 async def approve_cmd(ctx: commands.Context, member: Optional[discord.Member] = None):
