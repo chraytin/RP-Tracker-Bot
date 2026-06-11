@@ -1523,17 +1523,17 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
         gm_roll = None
 
         if do_loot:
-    gm_roll = random.randint(1, 100)
-    base = rarity_for_level(lvl)
-    final_rarity = rarity_shift(base, gm_roll, lvl)
+            gm_roll = random.randint(1, 100)
+            base = rarity_for_level(lvl)
+            final_rarity = rarity_shift(base, gm_roll, lvl)
 
-    item = random_loot(final_rarity)
+            item = random_loot(final_rarity)
 
-   if item:
-    loot_name, _ = item
-    loot_txt = loot_name
-else:
-    loot_txt = f"(No items loaded for {final_rarity})"
+            if item:
+                loot_name, _ = item
+                loot_txt = loot_name
+            else:
+                loot_txt = f"(No items loaded for {final_rarity})"
 
         if lvl == 20:
             reward_str = f"{xp_keys} 🗝️, {gp} gp"
