@@ -44,13 +44,14 @@ def _repo_path(filename: str) -> str:
     return os.path.join(base, filename)
 
 
-def load_loot_csv(path: str) -> List[str]:
-    items: List[str] = []
+def load_loot_csv(path: str) -> List[Tuple[str, str]]:
+    items: List[Tuple[str, str]] = []
     if not os.path.exists(path):
         return items
 
     with open(path, "r", encoding="utf-8", errors="ignore", newline="") as f:
         reader = csv.reader(f)
+
         for row in reader:
             if not row:
                 continue
@@ -67,19 +68,30 @@ def load_loot_csv(path: str) -> List[str]:
             if "minimum trade value" in low:
                 continue
 
-            items.append(name)
+            # Assumes Shop Price is column 2 / B.
+            # If it is a different column, change row[1].
+            shop_price = ""
+            if len(row) > 1:
+                shop_price = (row[1] or "").strip()
+
+            if not shop_price:
+                shop_price = "—"
+
+            items.append((name, shop_price))
 
     seen = set()
-    out: List[str] = []
-    for item in items:
-        if item not in seen:
-            seen.add(item)
-            out.append(item)
+    out: List[Tuple[str, str]] = []
+
+    for name, price in items:
+        key = name.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append((name, price))
 
     return out
 
 
-LOOT_TABLE: Dict[str, List[str]] = {}
+LOOT_TABLE: Dict[str, List[Tuple[str, str]]] = {}
 for rarity in RARITY_ORDER:
     fn = f"Guild Loot List - {rarity}.csv"
     LOOT_TABLE[rarity] = load_loot_csv(_repo_path(fn))
@@ -113,7 +125,7 @@ def rarity_shift(base: str, roll: int, level: int) -> str:
     return RARITY_ORDER[idx]
 
 
-def random_loot(rarity: str) -> Optional[str]:
+def random_loot(rarity: str) -> Optional[Tuple[str, str]]:
     pool = LOOT_TABLE.get(rarity) or []
     if not pool:
         return None
@@ -1568,13 +1580,21 @@ async def arcaneexchange_cmd(ctx: commands.Context):
         pool = LOOT_TABLE.get(rarity, [])
 
         if not pool:
-            items = ["(No items loaded)"]
-        else:
-            count = min(rarity_counts[rarity], len(pool))
-            items = random.sample(pool, count)
+            section = [f"**__{rarity}__**", "(No items loaded)"]
+            output_lines.append("\n".join(section))
+            continue
 
-        section = [f"**__{rarity}__**"]
-        section.extend(items)
+        count = min(rarity_counts[rarity], len(pool))
+        items = random.sample(pool, count)
+
+        item_width = max(len(name) for name, _price in items)
+        price_width = max(len(price) for _name, price in items)
+
+        section = [f"**__{rarity}__**", "```"]
+        for name, price in items:
+            section.append(f"{name:<{item_width}}  {price:>{price_width}}")
+        section.append("```")
+
         output_lines.append("\n".join(section))
 
     final_output = "\n\n".join(output_lines)
