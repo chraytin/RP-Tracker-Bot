@@ -840,6 +840,37 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
 # =========================
 # VIEW
 # =========================
+class EndConfirmModal(discord.ui.Modal, title="Confirm RP End"):
+    confirm = discord.ui.TextInput(
+        label='Type "yes" to end the RP for EVERYONE',
+        placeholder="yes",
+        max_length=10
+    )
+
+    def __init__(self, message_id: int):
+        super().__init__()
+        self.message_id = message_id
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if str(self.confirm.value).strip().lower() != "yes":
+            await interaction.response.send_message(
+                "❌ RP end cancelled. You must type `yes` exactly.",
+                ephemeral=True
+            )
+            return
+
+        await end_session_and_post_rewards(interaction, self.message_id)
+
+
+class EndConfirmView(discord.ui.View):
+    def __init__(self, message_id: int):
+        super().__init__(timeout=60)
+        self.message_id = message_id
+
+    @discord.ui.button(label="Confirm End RP", style=discord.ButtonStyle.danger)
+    async def confirm_end(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(EndConfirmModal(self.message_id))
+
 class RPView(discord.ui.View):
     def __init__(self, message_id: int):
         super().__init__(timeout=None)
@@ -1054,7 +1085,21 @@ class RPView(discord.ui.View):
         await update_tracker_message(self.message_id)
 
     async def end_cb(self, interaction: discord.Interaction):
-        await end_session_and_post_rewards(interaction, self.message_id)
+    embed = discord.Embed(
+        title="⚠️ End RP Confirmation",
+        description=(
+            "**Are you sure you want to end the RP for EVERYONE?**\n\n"
+            "This will close the ledger and generate rewards.\n"
+            "Click the button below, then type `yes` to confirm."
+        ),
+        color=discord.Color.red()
+    )
+
+    await interaction.response.send_message(
+        embed=embed,
+        view=EndConfirmView(self.message_id),
+        ephemeral=True
+    )
 
 
 # =========================
