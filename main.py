@@ -1092,13 +1092,13 @@ class RPView(discord.ui.View):
             "This will close the ledger and generate rewards.\n"
             "Click the button below, then type `yes` to confirm."
         ),
-        color=discord.Color.red()
+            color=discord.Color.red()
     )
 
-    await interaction.response.send_message(
-        embed=embed,
-        view=EndConfirmView(self.message_id),
-        ephemeral=True
+        await interaction.response.send_message(
+            embed=embed,
+            view=EndConfirmView(self.message_id),
+            ephemeral=True
     )
 
 
