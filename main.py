@@ -1085,7 +1085,7 @@ class RPView(discord.ui.View):
         await update_tracker_message(self.message_id)
 
     async def end_cb(self, interaction: discord.Interaction):
-    embed = discord.Embed(
+        embed = discord.Embed(
         title="⚠️ End RP Confirmation",
         description=(
             "**Are you sure you want to end the RP for EVERYONE?**\n\n"
