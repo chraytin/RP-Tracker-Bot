@@ -22,6 +22,7 @@ if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN is not set. Add it in Railway → Variables.")
 
 DOUBLE_RP_EVENT_ACTIVE = False
+DOUBLE_QUEST_EVENT_ACTIVE = True
 
 
 def db():
@@ -818,7 +819,7 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
             tag_txt = f" *({', '.join(tags)})*" if tags else ""
             await interaction.response.send_message(
                 f"✅ Signed in: **{cname}** (lvl {lvl}){tag_txt}\n\n"
-                f"🎉 **400 Member Event Active:** RP **XP and GP are automatically doubled**.\n"
+                f"🎉 **Vamp's B'day Bash Active:** RP **XP and GP are automatically doubled**.\n"
                 f"XP/GP dips are disabled during the event.",
                 ephemeral=True
             )
@@ -1555,13 +1556,24 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
         if lvl == 20:
             gp_min, gp_max = QUEST_GP.get(20, (3000, 4000))
             gp = gp_max if gp_mode == "max" else gp_min
+
+            if DOUBLE_QUEST_EVENT_ACTIVE:
+                gp *= 2
+
             xp = None
             xp_keys = 20
+
         else:
             xp_min, xp_max = QUEST_XP.get(lvl, (0, 0))
             gp_min, gp_max = QUEST_GP.get(lvl, (0, 0))
+
             xp = xp_max if xp_mode == "max" else xp_min
             gp = gp_max if gp_mode == "max" else gp_min
+
+            if DOUBLE_QUEST_EVENT_ACTIVE:
+                xp *= 2
+                gp *= 2
+
             xp_keys = None
 
         loot_txt = "none"
@@ -1594,7 +1606,10 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
 
         lines.append(f"{member.mention} - {char} {lvl} - ||{reward_bits}||")
 
-    DM_KEYS = 10
+        DM_KEYS = 10
+
+        if DOUBLE_QUEST_EVENT_ACTIVE:
+            DM_KEYS *= 2
     keys_add(ctx.guild.id, ctx.author.id, DM_KEYS)
 
     out = (
