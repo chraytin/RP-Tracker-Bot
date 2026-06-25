@@ -1632,6 +1632,13 @@ async def qrecords_cmd(ctx: commands.Context, *, args: str):
 # =========================
 @bot.command(name="arcaneexchange")
 async def arcaneexchange_cmd(ctx: commands.Context):
+
+    author_roles = {role.name for role in ctx.author.roles}
+
+    if not (author_roles & HEARTH_ONLY):
+        await ctx.send("❌ Only The Hearth may use the Arcane Exchange.")
+        return
+
     rarity_counts = {
         "Legendary": 4,
         "Very Rare": 6,
