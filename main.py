@@ -21,8 +21,8 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN is not set. Add it in Railway → Variables.")
 
-DOUBLE_RP_EVENT_ACTIVE = False
-DOUBLE_QUEST_EVENT_ACTIVE = True
+DOUBLE_RP_EVENT_ACTIVE = True
+DOUBLE_QUEST_EVENT_ACTIVE = False
 
 
 def db():
