@@ -554,7 +554,7 @@ def build_embed(message_id: int) -> discord.Embed:
     )
 
     if DOUBLE_RP_EVENT_ACTIVE:
-        reward_rule += "\n\n🎉 **400 Member Event Active:** RP **XP and GP are automatically doubled**. XP/GP dips are disabled."
+        reward_rule += "\n\n🎉 **Vamp's B'Day Bash Active:** RP **XP and GP are automatically doubled**. XP/GP dips are disabled."
 
     embed.add_field(name="Reward Rule", value=reward_rule, inline=False)
 
