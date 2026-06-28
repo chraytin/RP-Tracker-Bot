@@ -1635,7 +1635,7 @@ async def arcaneexchange_cmd(ctx: commands.Context):
 
     author_roles = {role.name for role in ctx.author.roles}
 
-    if not (author_roles & HEARTH_ONLY):
+    if not (author_roles & PAYDAY_ALLOWED_ROLES):
         await ctx.send("❌ Only The Hearth may use the Arcane Exchange.")
         return
 
