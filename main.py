@@ -924,29 +924,21 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
         return None
 
     async def on_submit(self, interaction: discord.Interaction):
-        level_raw = str(self.level.value).strip().lower()
+        try:
+            lvl = int(str(self.level.value).strip())
 
-        if level_raw in ("specialist", "special", "spec"):
-            is_specialist = 1
-            lvl = 21
-        else:
-            is_specialist = 0
+            if not 1 <= lvl <= 21:
+                raise ValueError
 
-            try:
-                lvl = int(str(self.level.value).strip())
+       except ValueError:
+           await interaction.response.send_message(
+               "❌ Level must be a number from `1` to `21`.\n"
+               "`21` represents a Specialist character.",
+               ephemeral=True
+           )
+           return
 
-                if not 1 <= lvl <= 21:
-                    raise ValueError
-
-            except ValueError:
-                await interaction.response.send_message(
-                    "❌ Level must be a number from `1` to `21`.\n"
-                    "`21` represents a Specialist character.",
-                    ephemeral=True
-                )
-                return
-
-            is_specialist = 1 if lvl == 21 else 0
+       is_specialist = 1 if lvl == 21 else 0
 
         cname = str(self.name.value).strip()
         if not cname:
