@@ -938,7 +938,7 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
            )
            return
 
-       is_specialist = 1 if lvl == 21 else 0
+        is_specialist = 1 if lvl == 21 else 0
 
         cname = str(self.name.value).strip()
         if not cname:
