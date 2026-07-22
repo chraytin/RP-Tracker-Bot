@@ -930,7 +930,7 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
             if not 1 <= lvl <= 21:
                 raise ValueError
 
-       except ValueError:
+        except ValueError:
            await interaction.response.send_message(
                "❌ Level must be a number from `1` to `21`.\n"
                "`21` represents a Specialist character.",
