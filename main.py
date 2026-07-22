@@ -873,8 +873,9 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
     )
 
     level = discord.ui.TextInput(
-        label="Level (1-20 or Specialist)",
-        max_length=10
+        label="Level (1-21)",
+        max_length=2,
+        placeholder="21 = Specialist"
     )
 
     capped = discord.ui.TextInput(
@@ -932,15 +933,20 @@ class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
             is_specialist = 0
 
             try:
-                lvl = int(level_raw)
-                if not 1 <= lvl <= 20:
+                lvl = int(str(self.level.value).strip())
+
+                if not 1 <= lvl <= 21:
                     raise ValueError
+
             except ValueError:
                 await interaction.response.send_message(
-                    "❌ Level must be a number between 1 and 20, or the word `Specialist`.",
+                    "❌ Level must be a number from `1` to `21`.\n"
+                    "`21` represents a Specialist character.",
                     ephemeral=True
                 )
                 return
+
+            is_specialist = 1 if lvl == 21 else 0
 
         cname = str(self.name.value).strip()
         if not cname:
