@@ -1077,7 +1077,34 @@ def build_jump_link(
         f"https://discord.com/channels/"
         f"{guild_id}/{channel_id}/{message_id}"
     )
+def split_discord_lines(
+    header: str,
+    lines: List[str],
+    limit: int = 1900
+) -> List[str]:
+    chunks: List[str] = []
+    current = header
 
+    for line in lines:
+        addition = (
+            "\n" + line
+            if current
+            else line
+        )
+
+        if len(current) + len(addition) > limit:
+            if current:
+                chunks.append(current)
+
+            current = line
+
+        else:
+            current += addition
+
+    if current:
+        chunks.append(current)
+
+    return chunks
 
 # =========================
 # SESSION HELPERS
@@ -2968,21 +2995,40 @@ async def end_session_and_post_rewards(
             except Exception:
                 traceback.print_exc()
 
-    if not lines:
-        lines = [
-            "*(no participants)*"
+     if not lines:
+         lines = [
+             "*(no participants)*"
         ]
 
-    content = (
-        header
-        + "\n".join(lines)
+    # Split rewards across as many Discord messages as needed.
+    reward_chunks = split_discord_lines(
+        header,
+        lines,
+        limit=1900
     )
 
-    rewards_msg = await interaction.followup.send(
-        content,
-        wait=True
-    )
+    reward_messages = []
 
+    for index, chunk in enumerate(reward_chunks):
+        if index > 0:
+            chunk = (
+                "🏁 **Guild Ledger Closed — Rewards Continued**\n"
+                + chunk
+            )
+
+        msg = await interaction.followup.send(
+            chunk,
+            wait=True
+        )
+
+        reward_messages.append(
+            msg
+        )
+
+
+    # =========================
+    # RP RECORD LINKS
+    # =========================
     try:
         events = get_session_events(
             message_id
@@ -3006,10 +3052,10 @@ async def end_session_and_post_rewards(
         ) in events:
 
             jump = build_jump_link(
-                ev_guild_id,
-                ev_channel_id,
-                event_message_id
-            )
+            ev_guild_id,
+            ev_channel_id,
+            event_message_id
+        )
 
             if event_type == "start":
                 start_link = jump
@@ -3028,42 +3074,40 @@ async def end_session_and_post_rewards(
                 )
 
         if end_link is None:
-            end_link = rewards_msg.jump_url
+            if reward_messages:
+                end_link = reward_messages[-1].jump_url
+            else:
+                end_link = tracker_url(
+                    guild_id,
+                    channel_id,
+                    message_id
+                )
 
         link_lines = [
-            f"Start: {start_link}",
-            ""
+            f"Start: {start_link}"
         ]
 
         link_lines.extend(
             mid_links
         )
 
-        if mid_links:
-            link_lines.append(
-                ""
-            )
-
         link_lines.append(
             f"End: {end_link}"
         )
 
-        links_bottom = (
-            "\n\n"
-            + "\n".join(
-                link_lines
-            )
+        link_chunks = split_discord_lines(
+            "🔗 **RP Record Links**",
+            link_lines,
+            limit=1900
         )
 
-        await rewards_msg.edit(
-            content=(
-                rewards_msg.content
-                + links_bottom
+        for chunk in link_chunks:
+            await interaction.followup.send(
+                chunk
             )
-        )
 
     except Exception:
-        pass
+        traceback.print_exc()
 
     await update_tracker_message(
         message_id
