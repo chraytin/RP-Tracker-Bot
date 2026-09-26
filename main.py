@@ -2995,9 +2995,9 @@ async def end_session_and_post_rewards(
             except Exception:
                 traceback.print_exc()
 
-     if not lines:
-         lines = [
-             "*(no participants)*"
+    if not lines:
+        lines = [
+            "*(no participants)*"
         ]
 
     # Split rewards across as many Discord messages as needed.
@@ -3025,7 +3025,6 @@ async def end_session_and_post_rewards(
             msg
         )
 
-
     # =========================
     # RP RECORD LINKS
     # =========================
@@ -3041,7 +3040,6 @@ async def end_session_and_post_rewards(
         )
 
         end_link = None
-
         mid_links: List[str] = []
 
         for (
@@ -3052,10 +3050,10 @@ async def end_session_and_post_rewards(
         ) in events:
 
             jump = build_jump_link(
-            ev_guild_id,
-            ev_channel_id,
-            event_message_id
-        )
+                ev_guild_id,
+                ev_channel_id,
+                event_message_id
+            )
 
             if event_type == "start":
                 start_link = jump
@@ -3108,6 +3106,10 @@ async def end_session_and_post_rewards(
 
     except Exception:
         traceback.print_exc()
+
+    await update_tracker_message(
+        message_id
+    )
 
     await update_tracker_message(
         message_id
