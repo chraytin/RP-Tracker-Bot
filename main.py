@@ -3000,47 +3000,22 @@ async def end_session_and_post_rewards(
             "*(no participants)*"
         ]
 
-    # Split rewards across as many Discord messages as needed.
-    reward_chunks = split_discord_lines(
-        header,
-        lines,
-        limit=1900
+    # =========================
+    # BUILD ALL RP RECORD LINKS
+    # =========================
+    start_link = tracker_url(
+        guild_id,
+        channel_id,
+        message_id
     )
 
-    reward_messages = []
+    end_link = None
+    mid_links: List[str] = []
 
-    for index, chunk in enumerate(reward_chunks):
-        if index > 0:
-            chunk = (
-                "🏁 **Guild Ledger Closed — Rewards Continued**\n"
-                + chunk
-            )
-
-        msg = await interaction.followup.send(
-            chunk,
-            wait=True
-        )
-
-        reward_messages.append(
-            msg
-        )
-
-    # =========================
-    # RP RECORD LINKS
-    # =========================
     try:
         events = get_session_events(
             message_id
         )
-
-        start_link = tracker_url(
-            guild_id,
-            channel_id,
-            message_id
-        )
-
-        end_link = None
-        mid_links: List[str] = []
 
         for (
             event_type,
@@ -3058,9 +3033,6 @@ async def end_session_and_post_rewards(
             if event_type == "start":
                 start_link = jump
 
-            elif event_type == "end":
-                end_link = jump
-
             elif event_type == "pause":
                 mid_links.append(
                     f"Pause: {jump}"
@@ -3071,45 +3043,87 @@ async def end_session_and_post_rewards(
                     f"Resume: {jump}"
                 )
 
-        if end_link is None:
-            if reward_messages:
-                end_link = reward_messages[-1].jump_url
-            else:
-                end_link = tracker_url(
-                    guild_id,
-                    channel_id,
-                    message_id
-                )
-
-        link_lines = [
-            f"Start: {start_link}"
-        ]
-
-        link_lines.extend(
-            mid_links
-        )
-
-        link_lines.append(
-            f"End: {end_link}"
-        )
-
-        link_chunks = split_discord_lines(
-            "🔗 **RP Record Links**",
-            link_lines,
-            limit=1900
-        )
-
-        for chunk in link_chunks:
-            await interaction.followup.send(
-                chunk
-            )
+            elif event_type == "end":
+                end_link = jump
 
     except Exception:
         traceback.print_exc()
 
-    await update_tracker_message(
-        message_id
+    if end_link is None:
+        end_link = tracker_url(
+            guild_id,
+            channel_id,
+            message_id
+        )
+
+    link_lines = [
+        f"Start: {start_link}"
+    ]
+
+    link_lines.extend(
+        mid_links
     )
+
+    link_lines.append(
+        f"End: {end_link}"
+    )
+
+    record_links = (
+        "\n\n"
+        + "\n".join(link_lines)
+    )
+
+    # =========================
+    # BUILD REWARD MESSAGES
+    # =========================
+    first_header = (
+        "🏁 **Guild Ledger Closed — Rewards Issued**\n"
+        "The registrar tallies the earnings and stamps the record.\n"
+    )
+
+    continuation_header = (
+        "🏁 **Guild Ledger Closed — Rewards Continued**\n"
+    )
+
+    reward_chunks: List[str] = []
+    current = first_header
+
+    for line in lines:
+        addition = "\n" + line
+
+        # Reserve enough room for ALL Start/Pause/Resume/End links.
+        if (
+            len(current)
+            + len(addition)
+            + len(record_links)
+            > 1900
+        ):
+            reward_chunks.append(
+                current + record_links
+            )
+
+            current = (
+                continuation_header
+                + "\n"
+                + line
+            )
+
+        else:
+            current += addition
+
+    if current:
+        reward_chunks.append(
+            current + record_links
+        )
+
+    # =========================
+    # POST ALL REWARD CHUNKS
+    # =========================
+    for chunk in reward_chunks:
+        await interaction.followup.send(
+            chunk,
+            wait=True
+        )
 
     await update_tracker_message(
         message_id
