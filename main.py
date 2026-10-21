@@ -6105,9 +6105,7 @@ async def approve_cmd(
             "to select your preferred roles.\n\n"
 
             "**Our Guild Rules:**\n"
-            "https://discord.com/channels/1464479110666649790/1464509536181293068\n"
-            "https://discord.com/channels/1464479110666649790/1467175186053992560\n"
-            "https://discord.com/channels/1464479110666649790/1464513607080349776\n\n"
+            "https://discord.com/channels/1464479110666649790/1557762596004827166\n\n"
 
             "**Want to chat with your fellow Guild Members?**\n"
             "https://discord.com/channels/1464479110666649790/1464523819309076532\n\n"
