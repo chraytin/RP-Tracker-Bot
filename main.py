@@ -4357,6 +4357,72 @@ async def loot_cmd(
         embed=embed
     )
 
+# =========================
+# RANDOM LOOT: !newloot
+# =========================
+@bot.command(
+    name="newloot"
+)
+async def newloot_cmd(
+    ctx: commands.Context,
+    *,
+    rarity: Optional[str] = None
+):
+    if ctx.guild is None:
+        await ctx.send(
+            "❌ This command can only be used in a server."
+        )
+        return
+
+    if not rarity:
+        await ctx.send(
+            "❌ Usage: `!newloot rare`"
+        )
+        return
+
+    rarity_lookup = {
+        "common": "Common",
+        "uncommon": "Uncommon",
+        "rare": "Rare",
+        "very rare": "Very Rare",
+        "veryrare": "Very Rare",
+        "legendary": "Legendary",
+        "artifact": "Artifact",
+    }
+
+    rarity_key = (
+        rarity
+        .strip()
+        .lower()
+    )
+
+    actual_rarity = rarity_lookup.get(
+        rarity_key
+    )
+
+    if actual_rarity is None:
+        await ctx.send(
+            "❌ Invalid rarity. Use: "
+            "`common`, `uncommon`, `rare`, "
+            "`very rare`, `legendary`, or `artifact`."
+        )
+        return
+
+    item = random_loot(
+        actual_rarity
+    )
+
+    if item is None:
+        await ctx.send(
+            f"❌ No items are loaded for **{actual_rarity}**."
+        )
+        return
+
+    item_name, _shop_price = item
+
+    await ctx.send(
+        f"🎲 **{actual_rarity} Loot:** {item_name}"
+    )
 
 # =========================
 # STAFF PERMISSIONS
