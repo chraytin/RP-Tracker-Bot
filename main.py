@@ -4789,3 +4789,1613 @@ def get_track_date_range(
         start_dt.timestamp(),
         end_dt.timestamp(),
     )
+# =========================
+# TRACK MEMBER RESOLVER
+# =========================
+async def resolve_track_member(
+    guild: discord.Guild,
+    value: str
+) -> Optional[discord.Member]:
+
+    value = value.strip()
+
+    uid = parse_user_id(
+        value
+    )
+
+    if uid is not None:
+        member = guild.get_member(
+            uid
+        )
+
+        if member is None:
+            try:
+                member = await guild.fetch_member(
+                    uid
+                )
+
+            except Exception:
+                return None
+
+        return member
+
+    search = (
+        value
+        .lstrip("@")
+        .lower()
+    )
+
+    def matches_member(
+        member: discord.Member
+    ) -> bool:
+
+        names = {
+            member.name.lower(),
+            member.display_name.lower(),
+            str(member).lower(),
+        }
+
+        global_name = getattr(
+            member,
+            "global_name",
+            None
+        )
+
+        if global_name:
+            names.add(
+                global_name.lower()
+            )
+
+        return search in names
+
+    matches = [
+        member
+        for member in guild.members
+        if matches_member(
+            member
+        )
+    ]
+
+    if len(matches) == 1:
+        return matches[0]
+
+    if not matches:
+        try:
+            fetched_matches = []
+
+            async for member in guild.fetch_members(
+                limit=None
+            ):
+                if matches_member(
+                    member
+                ):
+                    fetched_matches.append(
+                        member
+                    )
+
+            if len(fetched_matches) == 1:
+                return fetched_matches[0]
+
+        except Exception:
+            pass
+
+    return None
+
+
+# =========================
+# RP ACTIVITY TRACKING
+# !track
+# =========================
+@bot.command(
+    name="track"
+)
+async def track_cmd(
+    ctx: commands.Context,
+    *,
+    args: Optional[str] = None
+):
+    if ctx.guild is None:
+        await ctx.send(
+            "❌ This command can only be used in a server."
+        )
+        return
+
+    author_roles = {
+        role.name
+        for role in ctx.author.roles
+    }
+
+    if not (
+        author_roles
+        & PAYDAY_ALLOWED_ROLES
+    ):
+        await ctx.send(
+            "❌ Only The Hearth may use the RP tracking command."
+        )
+        return
+
+    if not args:
+        await ctx.send(
+            (
+                "❌ Usage:\n"
+                "`!track rphours @user 10/1/26-10/19/26`\n"
+                "`!track rpsessions @user 10/1/26-10/19/26`\n"
+                "`!track rptop 5 10/1/26-10/19/26`"
+            )
+        )
+        return
+
+    args = args.strip()
+
+    first_split = args.split(
+        maxsplit=1
+    )
+
+    mode = first_split[0].lower()
+
+    remainder = (
+        first_split[1].strip()
+        if len(first_split) > 1
+        else ""
+    )
+
+    if mode not in (
+        "rphours",
+        "rpsessions",
+        "rptop"
+    ):
+        await ctx.send(
+            (
+                "❌ Tracking type must be "
+                "`rphours`, `rpsessions`, "
+                "or `rptop`."
+            )
+        )
+        return
+
+    date_match = TRACK_DATE_RANGE_RE.search(
+        remainder
+    )
+
+    if not date_match:
+        await ctx.send(
+            (
+                "❌ I couldn't read the date range.\n"
+                "Use something like: "
+                "`10/1/26-10/19/26`"
+            )
+        )
+        return
+
+    start_text = date_match.group(
+        1
+    )
+
+    end_text = date_match.group(
+        2
+    )
+
+    try:
+        (
+            start_date,
+            end_date,
+            start_ts,
+            end_ts
+        ) = get_track_date_range(
+            start_text,
+            end_text
+        )
+
+    except ValueError as e:
+        await ctx.send(
+            f"❌ {e}"
+        )
+        return
+
+    display_range = (
+        f"{start_date.strftime('%m/%d/%Y')}"
+        " through "
+        f"{end_date.strftime('%m/%d/%Y')}"
+    )
+
+    # =========================
+    # TOP RP
+    # =========================
+    if mode == "rptop":
+
+        amount_text = remainder[
+            :date_match.start()
+        ].strip()
+
+        try:
+            amount = int(
+                amount_text
+            )
+
+        except Exception:
+            await ctx.send(
+                (
+                    "❌ Usage: "
+                    "`!track rptop 5 "
+                    "10/1/26-10/19/26`"
+                )
+            )
+            return
+
+        if amount < 1:
+            await ctx.send(
+                (
+                    "❌ Leaderboard size "
+                    "must be at least 1."
+                )
+            )
+            return
+
+        if amount > 25:
+            await ctx.send(
+                (
+                    "❌ `rptop` can show "
+                    "a maximum of 25 users."
+                )
+            )
+            return
+
+        with db() as conn:
+            with conn.cursor() as cur:
+
+                cur.execute("""
+                    WITH rp_entries AS (
+                        SELECT
+                            p.user_id,
+                            p.message_id,
+                            FLOOR(
+                                (
+                                    GREATEST(
+                                        COALESCE(
+                                            p.seconds,
+                                            0
+                                        ),
+                                        0
+                                    )
+                                    + 900
+                                )
+                                / 3600.0
+                            )::INT
+                            AS rewarded_hours
+                        FROM participants AS p
+                        INNER JOIN sessions AS s
+                            ON s.message_id =
+                               p.message_id
+                        WHERE
+                            s.guild_id=%s
+                            AND s.ended_at
+                                IS NOT NULL
+                            AND s.ended_at >= %s
+                            AND s.ended_at < %s
+                    )
+                    SELECT
+                        user_id,
+                        COALESCE(
+                            SUM(
+                                rewarded_hours
+                            ),
+                            0
+                        ) AS total_hours,
+                        COUNT(*) FILTER (
+                            WHERE
+                                rewarded_hours >= 1
+                        ) AS rp_sessions
+                    FROM rp_entries
+                    GROUP BY user_id
+                    HAVING
+                        SUM(
+                            rewarded_hours
+                        ) > 0
+                    ORDER BY
+                        total_hours DESC,
+                        rp_sessions DESC,
+                        user_id ASC
+                    LIMIT %s
+                """, (
+                    ctx.guild.id,
+                    start_ts,
+                    end_ts,
+                    amount
+                ))
+
+                rows = cur.fetchall()
+
+        if not rows:
+            await ctx.send(
+                (
+                    "📊 No rewarded RP activity "
+                    f"was found for **{display_range}**."
+                )
+            )
+            return
+
+        lines = []
+
+        for (
+            position,
+            (
+                user_id,
+                total_hours,
+                rp_sessions
+            )
+        ) in enumerate(
+            rows,
+            start=1
+        ):
+
+            user_id = int(
+                user_id
+            )
+
+            total_hours = int(
+                total_hours
+                or 0
+            )
+
+            rp_sessions = int(
+                rp_sessions
+                or 0
+            )
+
+            lines.append(
+                (
+                    f"**{position}.** "
+                    f"<@{user_id}> — "
+                    f"**{total_hours}h** — "
+                    f"**{rp_sessions} RP sessions**"
+                )
+            )
+
+        embed = discord.Embed(
+            title="🏆 RP Activity Leaderboard",
+            description=(
+                f"**{display_range}**\n\n"
+                + "\n".join(
+                    lines
+                )
+            ),
+            color=theme_color()
+        )
+
+        embed = apply_theme(
+            embed,
+            footer_text_override=(
+                "Hours are calculated using "
+                "rewarded RP hours."
+            )
+        )
+
+        await ctx.send(
+            embed=embed
+        )
+        return
+
+    # =========================
+    # USER RP
+    # =========================
+    target_text = remainder[
+        :date_match.start()
+    ].strip()
+
+    if not target_text:
+        await ctx.send(
+            (
+                f"❌ Usage: "
+                f"`!track {mode} @user "
+                "10/1/26-10/19/26`"
+            )
+        )
+        return
+
+    member = await resolve_track_member(
+        ctx.guild,
+        target_text
+    )
+
+    if member is None:
+        await ctx.send(
+            (
+                "❌ I couldn't uniquely "
+                "identify that user.\n"
+                "Use their Discord mention, "
+                "user ID, username, "
+                "or display name."
+            )
+        )
+        return
+
+    with db() as conn:
+        with conn.cursor() as cur:
+
+            cur.execute("""
+                WITH rp_entries AS (
+                    SELECT
+                        p.message_id,
+                        FLOOR(
+                            (
+                                GREATEST(
+                                    COALESCE(
+                                        p.seconds,
+                                        0
+                                    ),
+                                    0
+                                )
+                                + 900
+                            )
+                            / 3600.0
+                        )::INT
+                        AS rewarded_hours
+                    FROM participants AS p
+                    INNER JOIN sessions AS s
+                        ON s.message_id =
+                           p.message_id
+                    WHERE
+                        s.guild_id=%s
+                        AND p.user_id=%s
+                        AND s.ended_at
+                            IS NOT NULL
+                        AND s.ended_at >= %s
+                        AND s.ended_at < %s
+                )
+                SELECT
+                    COALESCE(
+                        SUM(
+                            rewarded_hours
+                        ),
+                        0
+                    ) AS total_hours,
+                    COUNT(*) FILTER (
+                        WHERE
+                            rewarded_hours >= 1
+                    ) AS rp_sessions
+                FROM rp_entries
+            """, (
+                ctx.guild.id,
+                member.id,
+                start_ts,
+                end_ts
+            ))
+
+            row = cur.fetchone()
+
+    total_hours = int(
+        row[0]
+        or 0
+    )
+
+    rp_sessions = int(
+        row[1]
+        or 0
+    )
+
+    if mode == "rphours":
+        embed = discord.Embed(
+            title="📊 RP Hours",
+            description=(
+                f"{member.mention}\n"
+                f"**{display_range}**\n\n"
+                f"Rewarded RP Hours: "
+                f"**{total_hours}h**\n"
+                f"Qualifying RP Sessions: "
+                f"**{rp_sessions}**"
+            ),
+            color=theme_color()
+        )
+
+    else:
+        embed = discord.Embed(
+            title="📊 RP Sessions",
+            description=(
+                f"{member.mention}\n"
+                f"**{display_range}**\n\n"
+                f"Qualifying RP Sessions: "
+                f"**{rp_sessions}**\n"
+                f"Rewarded RP Hours: "
+                f"**{total_hours}h**"
+            ),
+            color=theme_color()
+        )
+
+    embed = apply_theme(
+        embed,
+        footer_text_override=(
+            "A qualifying session is one "
+            "that earned at least "
+            "1 RP reward hour."
+        )
+    )
+
+    await ctx.send(
+        embed=embed
+    )
+
+
+# =========================
+# QUEST RECORDS: !qrecords
+# =========================
+@bot.command(
+    name="qrecords"
+)
+async def qrecords_cmd(
+    ctx: commands.Context,
+    *,
+    args: str
+):
+    if ctx.guild is None:
+        await ctx.send(
+            "❌ This command can only be used in a server."
+        )
+        return
+
+    try:
+        args = (
+            args
+            .replace(
+                "“",
+                '"'
+            )
+            .replace(
+                "”",
+                '"'
+            )
+            .replace(
+                "’",
+                "'"
+            )
+        )
+
+        parts = shlex.split(
+            args
+        )
+
+    except Exception:
+        await ctx.send(
+            (
+                "❌ Could not parse. "
+                "Make sure your quotes "
+                "are closed properly."
+            )
+        )
+        return
+
+    if len(parts) < 6:
+        await ctx.send(
+            (
+                '❌ Usage: !qrecords '
+                '"Name" "Desc" "Difficulty" '
+                '"xp-min/xp-max" '
+                '"gp-min/gp-max" '
+                '"loot/none" '
+                '@p char level ...\n'
+                'Use level `21` for a '
+                'Specialist character.'
+            )
+        )
+        return
+
+    (
+        qname,
+        qdesc,
+        diff,
+        xp_mode_raw,
+        gp_mode_raw,
+        loot_raw
+    ) = parts[:6]
+
+    rest = parts[6:]
+
+    xp_mode = (
+        "max"
+        if "max" in xp_mode_raw.lower()
+        else "min"
+    )
+
+    gp_mode = (
+        "max"
+        if "max" in gp_mode_raw.lower()
+        else "min"
+    )
+
+    do_loot = (
+        loot_raw
+        .strip()
+        .lower()
+        in (
+            "loot",
+            "yes",
+            "true",
+            "1"
+        )
+    )
+
+    if len(rest) % 3 != 0:
+        await ctx.send(
+            (
+                "❌ Player list must be "
+                "groups of 3: "
+                "@player CharacterName Level"
+            )
+        )
+        return
+
+    lines: List[str] = []
+
+    pending_specialist_coins: Dict[
+        int,
+        int
+    ] = {}
+
+    # Level 20 quest keys waiting
+    # to be applied after validation.
+    pending_player_keys: Dict[
+        int,
+        int
+    ] = {}
+
+    for i in range(
+        0,
+        len(rest),
+        3
+    ):
+        (
+            user_tok,
+            char,
+            lvl_tok
+        ) = rest[
+            i:i + 3
+        ]
+
+        uid = parse_user_id(
+            user_tok
+        )
+
+        if uid is None:
+            await ctx.send(
+                (
+                    "❌ Couldn't read player "
+                    f"mention/id: `{user_tok}`"
+                )
+            )
+            return
+
+        member = ctx.guild.get_member(
+            uid
+        )
+
+        if member is None:
+            try:
+                member = await ctx.guild.fetch_member(
+                    uid
+                )
+
+            except Exception:
+                member = None
+
+        if member is None:
+            await ctx.send(
+                (
+                    "❌ Couldn't find that "
+                    "member in this server: "
+                    f"`{user_tok}`"
+                )
+            )
+            return
+
+        try:
+            lvl = int(
+                lvl_tok
+            )
+
+            if not 1 <= lvl <= 21:
+                raise ValueError
+
+        except Exception:
+            await ctx.send(
+                (
+                    "❌ Bad level for "
+                    f"{member.mention}: "
+                    f"`{lvl_tok}`. "
+                    "Use levels `1-20`, "
+                    "or `21` for Specialist."
+                )
+            )
+            return
+
+        specialist_coins = None
+
+        # =========================
+        # SPECIALIST
+        # =========================
+        if lvl == 21:
+            specialist_coins = (
+                SPECIALIST_QUEST_COINS_MAX
+                if xp_mode == "max"
+                else SPECIALIST_QUEST_COINS_MIN
+            )
+
+            gp = (
+                SPECIALIST_QUEST_GP_MAX
+                if gp_mode == "max"
+                else SPECIALIST_QUEST_GP_MIN
+            )
+
+            if DOUBLE_QUEST_EVENT_ACTIVE:
+                gp *= 2
+
+            xp = None
+            xp_keys = None
+
+            pending_specialist_coins[
+                uid
+            ] = (
+                pending_specialist_coins.get(
+                    uid,
+                    0
+                )
+                + specialist_coins
+            )
+
+        # =========================
+        # LEVEL 20
+        # =========================
+        elif lvl == 20:
+            (
+                gp_min,
+                gp_max
+            ) = QUEST_GP.get(
+                20,
+                (
+                    1000,
+                    2000
+                )
+            )
+
+            gp = (
+                gp_max
+                if gp_mode == "max"
+                else gp_min
+            )
+
+            if DOUBLE_QUEST_EVENT_ACTIVE:
+                gp *= 2
+
+            xp = None
+            xp_keys = 4
+
+            # FIX:
+            # Actually award the Level 20
+            # quest keys to their keyring.
+            pending_player_keys[
+                uid
+            ] = (
+                pending_player_keys.get(
+                    uid,
+                    0
+                )
+                + xp_keys
+            )
+
+        # =========================
+        # LEVELS 1-19
+        # =========================
+        else:
+            (
+                xp_min,
+                xp_max
+            ) = QUEST_XP.get(
+                lvl,
+                (
+                    0,
+                    0
+                )
+            )
+
+            (
+                gp_min,
+                gp_max
+            ) = QUEST_GP.get(
+                lvl,
+                (
+                    0,
+                    0
+                )
+            )
+
+            xp = (
+                xp_max
+                if xp_mode == "max"
+                else xp_min
+            )
+
+            gp = (
+                gp_max
+                if gp_mode == "max"
+                else gp_min
+            )
+
+            if DOUBLE_QUEST_EVENT_ACTIVE:
+                xp *= 2
+                gp *= 2
+
+            xp_keys = None
+
+        # =========================
+        # LOOT ROLL
+        # =========================
+        loot_txt = "none"
+        gm_roll = None
+
+        if do_loot:
+            gm_roll = random.randint(
+                1,
+                100
+            )
+
+            base = rarity_for_level(
+                lvl
+            )
+
+            final_rarity = rarity_shift(
+                base,
+                gm_roll,
+                lvl
+            )
+
+            item = random_loot(
+                final_rarity
+            )
+
+            if item:
+                (
+                    loot_name,
+                    _
+                ) = item
+
+                loot_txt = loot_name
+
+            else:
+                loot_txt = (
+                    "(No items loaded for "
+                    f"{final_rarity})"
+                )
+
+        # =========================
+        # REWARD TEXT
+        # =========================
+        if lvl == 21:
+            reward_str = (
+                f"{specialist_coins} 🪙, "
+                f"{gp} gp"
+            )
+
+        elif lvl == 20:
+            reward_str = (
+                f"{xp_keys} 🗝️, "
+                f"{gp} gp"
+            )
+
+        else:
+            reward_str = (
+                f"{xp} xp, "
+                f"{gp} gp"
+            )
+
+        reward_bits = reward_str
+
+        if do_loot:
+            reward_bits += (
+                f", {loot_txt}, "
+                "(Grandmaster rolled: "
+                f"{gm_roll})"
+            )
+
+        else:
+            reward_bits += (
+                ", none"
+            )
+
+        tier_display = (
+            "Specialist"
+            if lvl == 21
+            else str(lvl)
+        )
+
+        lines.append(
+            (
+                f"{member.mention} - "
+                f"{char} "
+                f"{tier_display} - "
+                f"||{reward_bits}||"
+            )
+        )
+
+    DM_KEYS = 10
+
+    if DOUBLE_QUEST_EVENT_ACTIVE:
+        DM_KEYS *= 2
+
+    out = (
+        f"Quest Name: {qname}\n"
+        f"Quest Description: {qdesc}\n"
+        f"Quest Difficulty: {diff}\n"
+        + "\n".join(
+            lines
+        )
+        + f"\nDM ||{DM_KEYS} 🗝️||"
+    )
+
+    if len(out) > 1900:
+        await ctx.send(
+            (
+                "❌ Output too long for one message. "
+                "Run with fewer players "
+                "or shorter text."
+            )
+        )
+        return
+
+    # Specialist coins
+    for (
+        specialist_user_id,
+        coin_amount
+    ) in pending_specialist_coins.items():
+
+        special_add(
+            ctx.guild.id,
+            specialist_user_id,
+            coin_amount
+        )
+
+    # Level 20 quest keys
+    for (
+        player_user_id,
+        key_amount
+    ) in pending_player_keys.items():
+
+        keys_add(
+            ctx.guild.id,
+            player_user_id,
+            key_amount
+        )
+
+    # DM keys
+    keys_add(
+        ctx.guild.id,
+        ctx.author.id,
+        DM_KEYS
+    )
+
+    await ctx.send(
+        out
+    )
+
+
+# =========================
+# ARCANE EXCHANGE
+# =========================
+@bot.command(
+    name="arcaneexchange"
+)
+async def arcaneexchange_cmd(
+    ctx: commands.Context
+):
+    if ctx.guild is None:
+        await ctx.send(
+            "❌ This command can only be used in a server."
+        )
+        return
+
+    author_roles = {
+        role.name
+        for role in ctx.author.roles
+    }
+
+    if not (
+        author_roles
+        & PAYDAY_ALLOWED_ROLES
+    ):
+        await ctx.send(
+            (
+                "❌ Only The Hearth may "
+                "use the Arcane Exchange."
+            )
+        )
+        return
+
+    rarity_counts = {
+        "Legendary": 4,
+        "Very Rare": 6,
+        "Rare": 6,
+        "Uncommon": 6,
+        "Common": 6,
+    }
+
+    output_lines = []
+
+    for rarity in [
+        "Legendary",
+        "Very Rare",
+        "Rare",
+        "Uncommon",
+        "Common"
+    ]:
+
+        pool = LOOT_TABLE.get(
+            rarity,
+            []
+        )
+
+        if not pool:
+            section = [
+                f"**__{rarity}__**",
+                "(No items loaded)"
+            ]
+
+            output_lines.append(
+                "\n".join(
+                    section
+                )
+            )
+
+            continue
+
+        count = min(
+            rarity_counts[
+                rarity
+            ],
+            len(pool)
+        )
+
+        items = random.sample(
+            pool,
+            count
+        )
+
+        item_width = max(
+            len(name)
+            for (
+                name,
+                _price
+            ) in items
+        )
+
+        price_width = max(
+            len(price)
+            for (
+                _name,
+                price
+            ) in items
+        )
+
+        section = [
+            f"**__{rarity}__**",
+            "```"
+        ]
+
+        for (
+            name,
+            price
+        ) in items:
+
+            section.append(
+                (
+                    f"{name:<{item_width}}  "
+                    f"{price:>{price_width}}"
+                )
+            )
+
+        section.append(
+            "```"
+        )
+
+        output_lines.append(
+            "\n".join(
+                section
+            )
+        )
+
+    final_output = (
+        "\n\n".join(
+            output_lines
+        )
+    )
+
+    if len(final_output) > 1900:
+        await ctx.send(
+            "❌ Output too long."
+        )
+        return
+
+    await ctx.send(
+        final_output
+    )
+
+
+# =========================
+# APPROVE COMMAND: !approve
+# =========================
+ALLOWED_APPROVE_ROLES = {
+    "Stewards",
+    "The Hearth",
+    "DM"
+}
+
+APPROVE_REMOVE_ROLES = {
+    "Applicant"
+}
+
+APPROVE_ADD_ROLES = {
+    "Guild Initiate",
+    "Apprentice (2-4)",
+    "Fresh Adventurer"
+}
+
+GUILD_AMBASSADOR_ROLE_NAME = (
+    "Guild Ambassador"
+)
+
+FRESH_ADVENTURER_ROLE_NAME = (
+    "Fresh Adventurer"
+)
+
+
+@bot.command(
+    name="approve"
+)
+async def approve_cmd(
+    ctx: commands.Context,
+    member: Optional[
+        discord.Member
+    ] = None
+):
+    print(
+        (
+            f"!approve called by "
+            f"{ctx.author} "
+            f"with member={member}"
+        ),
+        flush=True
+    )
+
+    if ctx.guild is None:
+        await ctx.send(
+            "❌ This command can only be used in a server."
+        )
+        return
+
+    if member is None:
+        await ctx.send(
+            "❌ Usage: `!approve @player`"
+        )
+        return
+
+    author_role_names = {
+        role.name
+        for role in ctx.author.roles
+    }
+
+    if not (
+        author_role_names
+        & ALLOWED_APPROVE_ROLES
+    ):
+        await ctx.send(
+            (
+                "❌ Only members with the "
+                "Stewards, The Hearth, "
+                "or DM role may use this command."
+            )
+        )
+        return
+
+    guild = ctx.guild
+
+    roles_to_remove = []
+
+    for name in APPROVE_REMOVE_ROLES:
+
+        role = discord.utils.get(
+            guild.roles,
+            name=name
+        )
+
+        if role is None:
+            await ctx.send(
+                (
+                    "❌ Could not find "
+                    f"the role: `{name}`"
+                )
+            )
+            return
+
+        roles_to_remove.append(
+            role
+        )
+
+    roles_to_add = []
+
+    for name in APPROVE_ADD_ROLES:
+
+        role = discord.utils.get(
+            guild.roles,
+            name=name
+        )
+
+        if role is None:
+            await ctx.send(
+                (
+                    "❌ Could not find "
+                    f"the role: `{name}`"
+                )
+            )
+            return
+
+        roles_to_add.append(
+            role
+        )
+
+    ambassador_role = discord.utils.get(
+        guild.roles,
+        name=(
+            GUILD_AMBASSADOR_ROLE_NAME
+        )
+    )
+
+    if ambassador_role is None:
+        await ctx.send(
+            (
+                "❌ Could not find the role: "
+                f"`{GUILD_AMBASSADOR_ROLE_NAME}`"
+            )
+        )
+        return
+
+    me = (
+        guild.me
+        or guild.get_member(
+            bot.user.id
+        )
+    )
+
+    if me is None:
+        await ctx.send(
+            "❌ I couldn't verify my server permissions."
+        )
+        return
+
+    if not me.guild_permissions.manage_roles:
+        await ctx.send(
+            (
+                "❌ I need the **Manage Roles** "
+                "permission to do that."
+            )
+        )
+        return
+
+    for role in (
+        roles_to_remove
+        + roles_to_add
+    ):
+        if me.top_role <= role:
+            await ctx.send(
+                (
+                    "❌ My bot role must be higher "
+                    f"than `{role.name}` "
+                    "to manage it."
+                )
+            )
+            return
+
+    if me.top_role <= member.top_role:
+        await ctx.send(
+            (
+                "❌ My bot role must be higher "
+                "than that member’s top role "
+                "to edit their roles."
+            )
+        )
+        return
+
+    try:
+        if roles_to_remove:
+            await member.remove_roles(
+                *roles_to_remove,
+                reason=(
+                    f"Approved by "
+                    f"{ctx.author}"
+                )
+            )
+
+        if roles_to_add:
+            await member.add_roles(
+                *roles_to_add,
+                reason=(
+                    f"Approved by "
+                    f"{ctx.author}"
+                )
+            )
+
+    except discord.Forbidden:
+        await ctx.send(
+            (
+                "❌ Discord denied the role update. "
+                "Check role hierarchy "
+                "and permissions."
+            )
+        )
+        return
+
+    except discord.HTTPException as e:
+        await ctx.send(
+            (
+                "❌ Failed to update roles: "
+                f"{e}"
+            )
+        )
+        return
+
+    embed = discord.Embed(
+        title="Welcome to the Guild! ✅",
+        description=(
+            f"{member.mention} you're approved!\n\n"
+
+            "First, check out "
+            "https://discord.com/channels/1464479110666649790/1464503181873647616 "
+            "to select your preferred roles.\n\n"
+
+            "**Our Guild Rules:**\n"
+            "https://discord.com/channels/1464479110666649790/1557762596004827166\n\n"
+
+            "**Want to chat with your fellow Guild Members?**\n"
+            "https://discord.com/channels/1464479110666649790/1464523819309076532\n\n"
+
+            "**Rules for RP?**\n"
+            "https://discord.com/channels/1464479110666649790/1469524380408217833\n\n"
+
+            "**Want to join an RP?**\n"
+            "https://discord.com/channels/1464479110666649790/1464489594627162348\n\n"
+
+            "Any further questions, do not hesitate to ping "
+            f"{ambassador_role.mention} "
+            "in "
+            "https://discord.com/channels/1464479110666649790/1480193099195089056 "
+            "for a guided tour of the server "
+            "and how things work! 😁"
+        ),
+        color=theme_color()
+    )
+
+    embed = apply_theme(
+        embed
+    )
+
+    await ctx.send(
+        embed=embed
+    )
+
+
+# =========================
+# ERROR HANDLER
+# =========================
+@bot.tree.error
+async def on_app_command_error(
+    interaction: discord.Interaction,
+    error: Exception
+):
+    original = getattr(
+        error,
+        "original",
+        None
+    )
+
+    shown = (
+        original
+        if original
+        else error
+    )
+
+    print(
+        "Slash command error:",
+        repr(shown),
+        flush=True
+    )
+
+    traceback.print_exception(
+        type(shown),
+        shown,
+        shown.__traceback__
+    )
+
+    msg = (
+        f"❌ Error: "
+        f"`{type(shown).__name__}` — "
+        f"{shown}"
+    )
+
+    try:
+        if interaction.response.is_done():
+
+            await interaction.followup.send(
+                msg[:1900],
+                ephemeral=True
+            )
+
+        else:
+            await interaction.response.send_message(
+                msg[:1900],
+                ephemeral=True
+            )
+
+    except Exception:
+        pass
+
+
+# =========================
+# PREFIX ERROR HANDLER
+# =========================
+@bot.event
+async def on_command_error(
+    ctx: commands.Context,
+    error: Exception
+):
+    if isinstance(
+        error,
+        commands.MemberNotFound
+    ):
+        await ctx.send(
+            (
+                "❌ I couldn't find that member. "
+                "Try `!approve @player`."
+            )
+        )
+        return
+
+    if isinstance(
+        error,
+        commands.MissingRequiredArgument
+    ):
+        command_name = (
+            ctx.command.qualified_name
+            if ctx.command
+            else ""
+        )
+
+        if command_name == "approve":
+            await ctx.send(
+                "❌ Usage: `!approve @player`"
+            )
+
+        elif command_name == "qrecords":
+            await ctx.send(
+                (
+                    '❌ Usage: !qrecords '
+                    '"Name" "Desc" "Difficulty" '
+                    '"xp-min/xp-max" '
+                    '"gp-min/gp-max" '
+                    '"loot/none" '
+                    '@p char level ...'
+                )
+            )
+
+        else:
+            await ctx.send(
+                (
+                    "❌ That command is missing "
+                    "a required argument."
+                )
+            )
+
+        return
+
+    if isinstance(
+        error,
+        commands.CommandNotFound
+    ):
+        return
+
+    print(
+        "Prefix command error:",
+        repr(error),
+        flush=True
+    )
+
+    traceback.print_exception(
+        type(error),
+        error,
+        error.__traceback__
+    )
+
+    await ctx.send(
+        (
+            "❌ Command error: "
+            f"`{type(error).__name__}` — "
+            f"{error}"
+        )
+    )
+
+
+# =========================
+# READY
+# =========================
+@bot.event
+async def on_ready():
+    with db() as conn:
+        with conn.cursor() as cur:
+
+            cur.execute("""
+                SELECT message_id
+                FROM sessions
+            """)
+
+            msg_ids = [
+                int(r[0])
+                for r in cur.fetchall()
+            ]
+
+    for mid in msg_ids:
+        bot.add_view(
+            RPView(
+                mid
+            )
+        )
+
+    try:
+        await bot.tree.sync()
+
+        print(
+            "Slash commands synced.",
+            flush=True
+        )
+
+    except Exception as e:
+        print(
+            "Command sync failed:",
+            repr(e),
+            flush=True
+        )
+
+        traceback.print_exc()
+
+    # This lets Railway prove
+    # which prefix commands loaded.
+    print(
+        "Prefix commands registered:",
+        sorted(
+            command.name
+            for command in bot.commands
+        ),
+        flush=True
+    )
+
+    print(
+        (
+            f"Logged in as {bot.user} "
+            f"(guilds={len(bot.guilds)})"
+        ),
+        flush=True
+    )
+
+
+# =========================
+# MAIN
+# =========================
+async def main():
+    await start_web_server()
+
+    asyncio.create_task(
+        ticker_loop()
+    )
+
+    await bot.start(
+        TOKEN
+    )
+
+
+if __name__ == "__main__":
+    asyncio.run(
+        main()
+    )
