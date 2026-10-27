@@ -21,6 +21,7 @@ print("Booting RP Tracker...", flush=True)
 # CONFIG
 # =========================
 TOKEN = os.getenv("DISCORD_TOKEN")
+
 if not TOKEN:
     raise RuntimeError(
         "DISCORD_TOKEN is not set. Add it in Railway → Variables."
@@ -29,7 +30,6 @@ if not TOKEN:
 DOUBLE_RP_EVENT_ACTIVE = False
 DOUBLE_QUEST_EVENT_ACTIVE = False
 
-# Specialist rewards
 SPECIALIST_RP_COINS_PER_HOUR = 2
 SPECIALIST_RP_GP_PER_HOUR = 200
 
@@ -60,24 +60,24 @@ RARITY_ORDER = [
     "Rare",
     "Very Rare",
     "Legendary",
-    "Artifact"
+    "Artifact",
 ]
 
 
 def _repo_path(filename: str) -> str:
     base = os.getenv(
         "RAILWAY_WORKDIR",
-        "/app"
+        "/app",
     )
 
     return os.path.join(
         base,
-        filename
+        filename,
     )
 
 
 def load_loot_csv(
-    path: str
+    path: str,
 ) -> List[Tuple[str, str]]:
 
     items: List[Tuple[str, str]] = []
@@ -90,7 +90,7 @@ def load_loot_csv(
         "r",
         encoding="utf-8",
         errors="ignore",
-        newline=""
+        newline="",
     ) as f:
 
         reader = csv.reader(f)
@@ -112,7 +112,7 @@ def load_loot_csv(
             if low in (
                 "item",
                 "items",
-                "name"
+                "name",
             ):
                 continue
 
@@ -136,7 +136,7 @@ def load_loot_csv(
             items.append(
                 (
                     name,
-                    shop_price
+                    shop_price,
                 )
             )
 
@@ -148,7 +148,7 @@ def load_loot_csv(
 
     for (
         name,
-        price
+        price,
     ) in items:
 
         key = name.lower()
@@ -159,7 +159,7 @@ def load_loot_csv(
             out.append(
                 (
                     name,
-                    price
+                    price,
                 )
             )
 
@@ -170,7 +170,7 @@ def load_loot_csv(
 # DETAILED LOOT LOOKUP
 # =========================
 def _normalize_header(
-    value: str
+    value: str,
 ) -> str:
 
     return "".join(
@@ -184,23 +184,27 @@ def _normalize_header(
 
 def _csv_value(
     row: dict,
-    *possible_headers: str
+    *possible_headers: str,
 ) -> str:
 
     normalized_row = {}
 
     for (
         key,
-        value
+        value,
     ) in row.items():
 
         if key is None:
             continue
 
         normalized_row[
-            _normalize_header(key)
+            _normalize_header(
+                key
+            )
         ] = (
-            str(value).strip()
+            str(
+                value
+            ).strip()
             if value is not None
             else ""
         )
@@ -220,7 +224,7 @@ def _csv_value(
 
 def load_loot_details_csv(
     path: str,
-    rarity: str
+    rarity: str,
 ) -> List[Dict[str, str]]:
 
     items: List[
@@ -235,7 +239,7 @@ def load_loot_details_csv(
         "r",
         encoding="utf-8-sig",
         errors="ignore",
-        newline=""
+        newline="",
     ) as f:
 
         reader = csv.DictReader(f)
@@ -246,7 +250,7 @@ def load_loot_details_csv(
                 "Name",
                 "Item",
                 "Items",
-                "Item Name"
+                "Item Name",
             )
 
             if not name:
@@ -257,7 +261,7 @@ def load_loot_details_csv(
                 "Shop Price",
                 "Shop Value",
                 "Shop",
-                "Price"
+                "Price",
             )
 
             min_trade = _csv_value(
@@ -266,7 +270,7 @@ def load_loot_details_csv(
                 "Min Trade Value",
                 "Minimum Trade",
                 "Min Trade",
-                "Trade Value"
+                "Trade Value",
             )
 
             items.append({
@@ -302,7 +306,9 @@ for rarity in RARITY_ORDER:
     LOOT_TABLE[
         rarity
     ] = load_loot_csv(
-        _repo_path(fn)
+        _repo_path(
+            fn
+        )
     )
 
 
@@ -313,7 +319,7 @@ print(
         for k, v
         in LOOT_TABLE.items()
     },
-    flush=True
+    flush=True,
 )
 
 
@@ -330,8 +336,10 @@ for rarity in RARITY_ORDER:
 
     LOOT_DETAILS.extend(
         load_loot_details_csv(
-            _repo_path(fn),
-            rarity
+            _repo_path(
+                fn
+            ),
+            rarity,
         )
     )
 
@@ -339,12 +347,12 @@ for rarity in RARITY_ORDER:
 print(
     f"Loot details loaded: "
     f"{len(LOOT_DETAILS)} items",
-    flush=True
+    flush=True,
 )
 
 
 def rarity_for_level(
-    level: int
+    level: int,
 ) -> str:
 
     if 2 <= level <= 4:
@@ -365,9 +373,12 @@ def rarity_for_level(
 def rarity_shift(
     base: str,
     roll: int,
-    level: int
+    level: int,
 ) -> str:
 
+    # Grandmaster quest rolls can NEVER
+    # automatically produce Artifact loot.
+    # Legendary is the maximum.
     idx = RARITY_ORDER.index(
         base
     )
@@ -375,7 +386,7 @@ def rarity_shift(
     if roll == 1:
         idx = max(
             0,
-            idx - 1
+            idx - 1,
         )
 
     elif roll == 100:
@@ -383,7 +394,7 @@ def rarity_shift(
             RARITY_ORDER.index(
                 "Legendary"
             ),
-            idx + 1
+            idx + 1,
         )
 
     return RARITY_ORDER[
@@ -392,7 +403,7 @@ def rarity_shift(
 
 
 def random_loot(
-    rarity: str
+    rarity: str,
 ) -> Optional[Tuple[str, str]]:
 
     pool = (
@@ -595,8 +606,6 @@ def ensure_schema():
                 WHERE present IS NULL
             """)
 
-            # Backfill old RP completion dates using
-            # previously recorded End events.
             cur.execute("""
                 UPDATE sessions AS s
                 SET ended_at = e.ended_at
@@ -613,7 +622,6 @@ def ensure_schema():
                     AND s.ended_at IS NULL
             """)
 
-            # Indexes for RP tracking queries.
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS
                     idx_sessions_guild_ended
@@ -640,14 +648,14 @@ ensure_schema()
 # RP REWARD RULES
 # =========================
 def reward_hours(
-    seconds: float
+    seconds: float,
 ) -> int:
 
     return int(
         (
             max(
                 0.0,
-                seconds
+                seconds,
             )
             + 900
         )
@@ -656,7 +664,7 @@ def reward_hours(
 
 
 def xp_per_hour_for_level(
-    level: int
+    level: int,
 ) -> int:
 
     if 2 <= level <= 4:
@@ -678,12 +686,14 @@ def xp_per_hour_for_level(
 
 
 def gp_per_hour_for_level(
-    level: int
+    level: int,
 ) -> int:
 
     return max(
         0,
-        int(level)
+        int(
+            level
+        ),
     ) * 10
 
 
@@ -757,14 +767,14 @@ def theme_color() -> discord.Color:
 
     raw = os.getenv(
         "THEME_COLOR",
-        "#C9A227"
+        "#C9A227",
     ).lstrip("#")
 
     try:
         return discord.Color(
             int(
                 raw,
-                16
+                16,
             )
         )
 
@@ -775,7 +785,7 @@ def theme_color() -> discord.Color:
 def apply_theme(
     embed: discord.Embed,
     *,
-    footer_text_override: Optional[str] = None
+    footer_text_override: Optional[str] = None,
 ) -> discord.Embed:
 
     embed.color = theme_color()
@@ -800,7 +810,7 @@ def apply_theme(
 
     guild_name = os.getenv(
         "THEME_NAME",
-        "Adventurer’s Guild Ledger"
+        "Adventurer’s Guild Ledger",
     )
 
     embed.set_author(
@@ -812,7 +822,7 @@ def apply_theme(
         if footer_text_override is not None
         else os.getenv(
             "THEME_FOOTER_TEXT",
-            "Stamped & filed by the Guild Registrar • Rewards granted on 45-minute marks"
+            "Stamped & filed by the Guild Registrar • Rewards granted on 45-minute marks",
         )
     )
 
@@ -823,7 +833,7 @@ def apply_theme(
     if footer_icon:
         embed.set_footer(
             text=footer_text,
-            icon_url=footer_icon
+            icon_url=footer_icon,
         )
 
     else:
@@ -844,7 +854,7 @@ intents.message_content = True
 
 bot = commands.Bot(
     command_prefix="!",
-    intents=intents
+    intents=intents,
 )
 
 
@@ -852,7 +862,7 @@ bot = commands.Bot(
 # KEEPALIVE WEB SERVER
 # =========================
 async def handle_root(
-    _: web.Request
+    _: web.Request,
 ) -> web.Response:
 
     return web.Response(
@@ -861,7 +871,7 @@ async def handle_root(
 
 
 async def handle_health(
-    _: web.Request
+    _: web.Request,
 ) -> web.Response:
 
     return web.Response(
@@ -873,7 +883,7 @@ async def start_web_server():
     port = int(
         os.getenv(
             "PORT",
-            "8080"
+            "8080",
         )
     )
 
@@ -881,12 +891,12 @@ async def start_web_server():
 
     app.router.add_get(
         "/",
-        handle_root
+        handle_root,
     )
 
     app.router.add_get(
         "/health",
-        handle_health
+        handle_health,
     )
 
     runner = web.AppRunner(
@@ -898,7 +908,7 @@ async def start_web_server():
     site = web.TCPSite(
         runner,
         "0.0.0.0",
-        port
+        port,
     )
 
     await site.start()
@@ -906,7 +916,7 @@ async def start_web_server():
     print(
         f"Web server listening on "
         f"0.0.0.0:{port}",
-        flush=True
+        flush=True,
     )
 
 
@@ -915,7 +925,7 @@ async def start_web_server():
 # =========================
 def keys_get(
     guild_id: int,
-    user_id: int
+    user_id: int,
 ) -> Tuple[int, int]:
 
     with db() as conn:
@@ -931,7 +941,7 @@ def keys_get(
                     AND user_id=%s
             """, (
                 guild_id,
-                user_id
+                user_id,
             ))
 
             row = cur.fetchone()
@@ -947,14 +957,14 @@ def keys_get(
         int(
             row[1]
             or 0
-        )
+        ),
     )
 
 
 def keys_add(
     guild_id: int,
     user_id: int,
-    amount: int
+    amount: int,
 ):
     amount = int(
         amount
@@ -994,14 +1004,14 @@ def keys_add(
                 guild_id,
                 user_id,
                 amount,
-                amount
+                amount,
             ))
 
 
 def keys_sub(
     guild_id: int,
     user_id: int,
-    amount: int
+    amount: int,
 ):
     amount = int(
         amount
@@ -1033,7 +1043,7 @@ def keys_sub(
                 DO NOTHING
             """, (
                 guild_id,
-                user_id
+                user_id,
             ))
 
             cur.execute("""
@@ -1048,14 +1058,14 @@ def keys_sub(
             """, (
                 amount,
                 guild_id,
-                user_id
+                user_id,
             ))
 
 
 def build_key_embed(
     member: discord.Member,
     current: int,
-    lifetime: int
+    lifetime: int,
 ) -> discord.Embed:
 
     embed = discord.Embed(
@@ -1064,19 +1074,23 @@ def build_key_embed(
             f"{member.display_name}'s Keyring"
         ),
         description="",
-        color=theme_color()
+        color=theme_color(),
     )
 
     embed.add_field(
         name="Current Keys",
-        value=str(current),
-        inline=False
+        value=str(
+            current
+        ),
+        inline=False,
     )
 
     embed.add_field(
         name="Lifetime Keys",
-        value=str(lifetime),
-        inline=False
+        value=str(
+            lifetime
+        ),
+        inline=False,
     )
 
     key_thumb = (
@@ -1098,7 +1112,7 @@ def build_key_embed(
         footer_text_override=(
             "Stamped & filed by "
             "the Guild Registrar"
-        )
+        ),
     )
 
 
@@ -1107,7 +1121,7 @@ def build_key_embed(
 # =========================
 def special_get(
     guild_id: int,
-    user_id: int
+    user_id: int,
 ) -> Tuple[int, int]:
 
     with db() as conn:
@@ -1123,7 +1137,7 @@ def special_get(
                     AND user_id=%s
             """, (
                 guild_id,
-                user_id
+                user_id,
             ))
 
             row = cur.fetchone()
@@ -1139,14 +1153,14 @@ def special_get(
         int(
             row[1]
             or 0
-        )
+        ),
     )
 
 
 def special_add(
     guild_id: int,
     user_id: int,
-    amount: int
+    amount: int,
 ):
     amount = int(
         amount
@@ -1186,14 +1200,14 @@ def special_add(
                 guild_id,
                 user_id,
                 amount,
-                amount
+                amount,
             ))
 
 
 def special_sub(
     guild_id: int,
     user_id: int,
-    amount: int
+    amount: int,
 ):
     amount = int(
         amount
@@ -1225,7 +1239,7 @@ def special_sub(
                 DO NOTHING
             """, (
                 guild_id,
-                user_id
+                user_id,
             ))
 
             cur.execute("""
@@ -1240,14 +1254,14 @@ def special_sub(
             """, (
                 amount,
                 guild_id,
-                user_id
+                user_id,
             ))
 
 
 def build_special_embed(
     member: discord.Member,
     current: int,
-    lifetime: int
+    lifetime: int,
 ) -> discord.Embed:
 
     embed = discord.Embed(
@@ -1257,19 +1271,23 @@ def build_special_embed(
             f"Specialist Purse"
         ),
         description="",
-        color=theme_color()
+        color=theme_color(),
     )
 
     embed.add_field(
         name="Current Coins",
-        value=str(current),
-        inline=False
+        value=str(
+            current
+        ),
+        inline=False,
     )
 
     embed.add_field(
         name="Lifetime Coins",
-        value=str(lifetime),
-        inline=False
+        value=str(
+            lifetime
+        ),
+        inline=False,
     )
 
     special_thumb = (
@@ -1291,7 +1309,7 @@ def build_special_embed(
         footer_text_override=(
             "Stamped & filed in "
             "the Specialist Ledger"
-        )
+        ),
     )
 
 
@@ -1303,7 +1321,7 @@ def log_session_event(
     event_type: str,
     event_message_id: int,
     channel_id: int,
-    guild_id: int
+    guild_id: int,
 ):
     with db() as conn:
         with conn.cursor() as cur:
@@ -1331,18 +1349,18 @@ def log_session_event(
                 event_message_id,
                 channel_id,
                 guild_id,
-                time.time()
+                time.time(),
             ))
 
 
 def get_session_events(
-    session_message_id: int
+    session_message_id: int,
 ) -> List[
     Tuple[
         str,
         int,
         int,
-        int
+        int,
     ]
 ]:
 
@@ -1368,16 +1386,24 @@ def get_session_events(
 
     return [
         (
-            str(event_type),
-            int(event_message_id),
-            int(channel_id),
-            int(guild_id)
+            str(
+                event_type
+            ),
+            int(
+                event_message_id
+            ),
+            int(
+                channel_id
+            ),
+            int(
+                guild_id
+            ),
         )
         for (
             event_type,
             event_message_id,
             channel_id,
-            guild_id
+            guild_id,
         ) in rows
     ]
 
@@ -1385,7 +1411,7 @@ def get_session_events(
 def build_jump_link(
     guild_id: int,
     channel_id: int,
-    message_id: int
+    message_id: int,
 ) -> str:
 
     return (
@@ -1399,7 +1425,7 @@ def build_jump_link(
 def split_discord_lines(
     header: str,
     lines: List[str],
-    limit: int = 1900
+    limit: int = 1900,
 ) -> List[str]:
 
     chunks: List[str] = []
@@ -1413,8 +1439,12 @@ def split_discord_lines(
         )
 
         if (
-            len(current)
-            + len(addition)
+            len(
+                current
+            )
+            + len(
+                addition
+            )
             > limit
         ):
             if current:
@@ -1439,13 +1469,13 @@ def split_discord_lines(
 # SESSION HELPERS
 # =========================
 def get_session(
-    message_id: int
+    message_id: int,
 ) -> Tuple[
     int,
     Optional[float],
     float,
     Optional[int],
-    Optional[int]
+    Optional[int],
 ]:
 
     with db() as conn:
@@ -1475,7 +1505,7 @@ def get_session(
             None,
             0.0,
             None,
-            None
+            None,
         )
 
     state = int(
@@ -1484,7 +1514,9 @@ def get_session(
     )
 
     started_at = (
-        float(row[1])
+        float(
+            row[1]
+        )
         if row[1] is not None
         else None
     )
@@ -1495,13 +1527,17 @@ def get_session(
     )
 
     channel_id = (
-        int(row[3])
+        int(
+            row[3]
+        )
         if row[3] is not None
         else None
     )
 
     guild_id = (
-        int(row[4])
+        int(
+            row[4]
+        )
         if row[4] is not None
         else None
     )
@@ -1511,12 +1547,12 @@ def get_session(
         started_at,
         run_seconds,
         channel_id,
-        guild_id
+        guild_id,
     )
 
 
 def list_participants(
-    message_id: int
+    message_id: int,
 ) -> List[
     Tuple[
         int,
@@ -1526,7 +1562,7 @@ def list_participants(
         int,
         int,
         int,
-        int
+        int,
     ]
 ]:
 
@@ -1569,14 +1605,30 @@ def list_participants(
 
     return [
         (
-            int(uid),
-            str(ch),
-            int(lvl),
-            float(secs),
-            int(cap),
-            int(xd),
-            int(gd),
-            int(spec)
+            int(
+                uid
+            ),
+            str(
+                ch
+            ),
+            int(
+                lvl
+            ),
+            float(
+                secs
+            ),
+            int(
+                cap
+            ),
+            int(
+                xd
+            ),
+            int(
+                gd
+            ),
+            int(
+                spec
+            ),
         )
         for (
             uid,
@@ -1586,13 +1638,13 @@ def list_participants(
             cap,
             xd,
             gd,
-            spec
+            spec,
         ) in rows
     ]
 
 
 def session_elapsed_seconds(
-    message_id: int
+    message_id: int,
 ) -> float:
 
     (
@@ -1600,7 +1652,7 @@ def session_elapsed_seconds(
         started_at,
         run_seconds,
         _,
-        _
+        _,
     ) = get_session(
         message_id
     )
@@ -1614,7 +1666,7 @@ def session_elapsed_seconds(
             + max(
                 0.0,
                 time.time()
-                - started_at
+                - started_at,
             )
         )
 
@@ -1622,12 +1674,12 @@ def session_elapsed_seconds(
 
 
 def fmt_hm(
-    seconds: float
+    seconds: float,
 ) -> str:
 
     seconds = max(
         0.0,
-        seconds
+        seconds,
     )
 
     h = int(
@@ -1650,7 +1702,7 @@ def fmt_hm(
 
 
 def state_label(
-    state: int
+    state: int,
 ) -> str:
 
     if state == 1:
@@ -1665,7 +1717,7 @@ def state_label(
 def tracker_url(
     guild_id: int,
     channel_id: int,
-    message_id: int
+    message_id: int,
 ) -> str:
 
     return (
@@ -1677,7 +1729,7 @@ def tracker_url(
 
 
 def build_embed(
-    message_id: int
+    message_id: int,
 ) -> discord.Embed:
 
     (
@@ -1685,7 +1737,7 @@ def build_embed(
         _,
         _,
         _,
-        _
+        _,
     ) = get_session(
         message_id
     )
@@ -1706,7 +1758,7 @@ def build_embed(
         description=(
             "The registrar’s record of "
             "attendance and session time."
-        )
+        ),
     )
 
     embed.add_field(
@@ -1714,7 +1766,7 @@ def build_embed(
         value=state_label(
             state
         ),
-        inline=True
+        inline=True,
     )
 
     embed.add_field(
@@ -1724,7 +1776,7 @@ def build_embed(
             f"{fmt_hm(elapsed)}"
             f"**"
         ),
-        inline=True
+        inline=True,
     )
 
     if parts:
@@ -1738,7 +1790,7 @@ def build_embed(
             cap,
             reward_dip,
             gp_dip,
-            specialist
+            specialist,
         ) in parts:
 
             tags = []
@@ -1816,7 +1868,7 @@ def build_embed(
     embed.add_field(
         name="Roster",
         value=roster[:1024],
-        inline=False
+        inline=False,
     )
 
     reward_rule = (
@@ -1840,7 +1892,7 @@ def build_embed(
     embed.add_field(
         name="Reward Rule",
         value=reward_rule,
-        inline=False
+        inline=False,
     )
 
     return apply_theme(
@@ -1851,7 +1903,7 @@ def build_embed(
 def build_rp_status_announcement(
     action: str,
     actor: discord.abc.User,
-    message_id: int
+    message_id: int,
 ) -> discord.Embed:
 
     (
@@ -1859,7 +1911,7 @@ def build_rp_status_announcement(
         _,
         _,
         _,
-        _
+        _,
     ) = get_session(
         message_id
     )
@@ -1897,13 +1949,13 @@ def build_rp_status_announcement(
     embed = discord.Embed(
         title=titles.get(
             action,
-            "📜 RP Session Update"
+            "📜 RP Session Update",
         ),
         description=descriptions.get(
             action,
-            "The status of this RP has changed."
+            "The status of this RP has changed.",
         ),
-        color=theme_color()
+        color=theme_color(),
     )
 
     embed.add_field(
@@ -1911,7 +1963,7 @@ def build_rp_status_announcement(
         value=state_label(
             state
         ),
-        inline=True
+        inline=True,
     )
 
     embed.add_field(
@@ -1921,20 +1973,20 @@ def build_rp_status_announcement(
             f"{fmt_hm(elapsed)}"
             f"**"
         ),
-        inline=True
+        inline=True,
     )
 
     embed.add_field(
         name="Filed By",
         value=actor.mention,
-        inline=False
+        inline=False,
     )
 
     return apply_theme(
         embed,
         footer_text_override=(
             "Filed in the Guild Ledger"
-        )
+        ),
     )
 
 
@@ -1942,13 +1994,13 @@ async def post_rp_status_announcement(
     channel: discord.abc.Messageable,
     action: str,
     actor: discord.abc.User,
-    session_message_id: int
+    session_message_id: int,
 ):
     try:
         embed = build_rp_status_announcement(
             action,
             actor,
-            session_message_id
+            session_message_id,
         )
 
         msg = await channel.send(
@@ -1958,19 +2010,19 @@ async def post_rp_status_announcement(
         guild = getattr(
             channel,
             "guild",
-            None
+            None,
         )
 
         channel_id = getattr(
             channel,
             "id",
-            None
+            None,
         )
 
         guild_id = getattr(
             guild,
             "id",
-            None
+            None,
         )
 
         if (
@@ -1984,7 +2036,7 @@ async def post_rp_status_announcement(
                 event_type=action,
                 event_message_id=msg.id,
                 channel_id=channel_id,
-                guild_id=guild_id
+                guild_id=guild_id,
             )
 
         return msg
@@ -1992,7 +2044,7 @@ async def post_rp_status_announcement(
     except Exception:
         print(
             "Failed to post RP status announcement",
-            flush=True
+            flush=True,
         )
 
         traceback.print_exc()
@@ -2001,14 +2053,14 @@ async def post_rp_status_announcement(
 
 
 async def update_tracker_message(
-    message_id: int
+    message_id: int,
 ):
     (
         _,
         _,
         _,
         channel_id,
-        _
+        _,
     ) = get_session(
         message_id
     )
@@ -2032,7 +2084,7 @@ async def update_tracker_message(
     if (
         isinstance(
             channel,
-            discord.Thread
+            discord.Thread,
         )
         and channel.archived
     ):
@@ -2055,7 +2107,7 @@ async def update_tracker_message(
             embed=build_embed(
                 message_id
             ),
-            view=view
+            view=view,
         )
 
         bot.add_view(
@@ -2066,18 +2118,18 @@ async def update_tracker_message(
         if getattr(
             e,
             "code",
-            None
+            None,
         ) == 50083:
             return
 
         if getattr(
             e,
             "status",
-            None
+            None,
         ) in (
             502,
             503,
-            504
+            504,
         ):
             print(
                 (
@@ -2085,7 +2137,7 @@ async def update_tracker_message(
                     f"error while updating tracker "
                     f"{message_id}: {e}"
                 ),
-                flush=True
+                flush=True,
             )
             return
 
@@ -2098,7 +2150,7 @@ async def update_tracker_message(
                 f"server error while updating "
                 f"tracker {message_id}: {e}"
             ),
-            flush=True
+            flush=True,
         )
         return
 
@@ -2118,8 +2170,7 @@ async def update_tracker_message(
 
         if any(
             marker in err_text
-            for marker
-            in transient_markers
+            for marker in transient_markers
         ):
             print(
                 (
@@ -2127,7 +2178,7 @@ async def update_tracker_message(
                     f"error while updating tracker "
                     f"{message_id}: {e}"
                 ),
-                flush=True
+                flush=True,
             )
             return
 
@@ -2150,9 +2201,10 @@ def tick_running_sessions():
             """)
 
             running_ids = [
-                int(r[0])
-                for r
-                in cur.fetchall()
+                int(
+                    r[0]
+                )
+                for r in cur.fetchall()
             ]
 
             for mid in running_ids:
@@ -2177,7 +2229,7 @@ def tick_running_sessions():
                 for (
                     uid,
                     last_tick,
-                    secs
+                    secs,
                 ) in rows:
 
                     delta = max(
@@ -2185,7 +2237,7 @@ def tick_running_sessions():
                         now
                         - float(
                             last_tick
-                        )
+                        ),
                     )
 
                     new_secs = (
@@ -2209,7 +2261,9 @@ def tick_running_sessions():
                         new_secs,
                         now,
                         mid,
-                        int(uid)
+                        int(
+                            uid
+                        ),
                     ))
 
 
@@ -2228,9 +2282,10 @@ async def ticker_loop():
                     """)
 
                     mids = [
-                        int(r[0])
-                        for r
-                        in cur.fetchall()
+                        int(
+                            r[0]
+                        )
+                        for r in cur.fetchall()
                     ]
 
             for mid in mids:
@@ -2245,7 +2300,7 @@ async def ticker_loop():
                             "Ticker update failed "
                             f"for message_id={mid}"
                         ),
-                        flush=True
+                        flush=True,
                     )
 
                     traceback.print_exc()
@@ -2253,7 +2308,7 @@ async def ticker_loop():
         except Exception:
             print(
                 "Ticker loop error:",
-                flush=True
+                flush=True,
             )
 
             traceback.print_exc()
@@ -2268,24 +2323,24 @@ async def ticker_loop():
 # =========================
 class JoinModal(
     discord.ui.Modal,
-    title="Adventurer Sign-In"
+    title="Adventurer Sign-In",
 ):
     name = discord.ui.TextInput(
         label="Character Name",
-        max_length=64
+        max_length=64,
     )
 
     level = discord.ui.TextInput(
         label="Level (1-21)",
         max_length=2,
-        placeholder="21 = Specialist"
+        placeholder="21 = Specialist",
     )
 
     capped = discord.ui.TextInput(
         label="Capped? (yes/no)",
         required=False,
         max_length=5,
-        placeholder="no"
+        placeholder="no",
     )
 
     xp_dip = discord.ui.TextInput(
@@ -2295,19 +2350,19 @@ class JoinModal(
         ),
         required=False,
         max_length=10,
-        placeholder="no"
+        placeholder="no",
     )
 
     gp_dip = discord.ui.TextInput(
         label="GP DIP? (yes/no)",
         required=False,
         max_length=5,
-        placeholder="no"
+        placeholder="no",
     )
 
     def __init__(
         self,
-        message_id: int
+        message_id: int,
     ):
         super().__init__()
 
@@ -2317,7 +2372,7 @@ class JoinModal(
 
     @staticmethod
     def _is_yes(
-        val: Optional[str]
+        val: Optional[str],
     ) -> int:
 
         raw = (
@@ -2335,14 +2390,14 @@ class JoinModal(
                 "yes",
                 "true",
                 "1",
-                "dip"
+                "dip",
             )
             else 0
         )
 
     @staticmethod
     def _parse_reward_dip(
-        val: Optional[str]
+        val: Optional[str],
     ) -> Optional[int]:
 
         raw = (
@@ -2359,7 +2414,7 @@ class JoinModal(
             "no",
             "none",
             "false",
-            "0"
+            "0",
         ):
             return 0
 
@@ -2368,7 +2423,7 @@ class JoinModal(
             "yes",
             "dip",
             "single dip",
-            "1"
+            "1",
         ):
             return 1
 
@@ -2377,7 +2432,7 @@ class JoinModal(
             "double dip",
             "doubledip",
             "dd",
-            "2"
+            "2",
         ):
             return 2
 
@@ -2385,7 +2440,7 @@ class JoinModal(
 
     async def on_submit(
         self,
-        interaction: discord.Interaction
+        interaction: discord.Interaction,
     ):
         try:
             lvl = int(
@@ -2404,7 +2459,7 @@ class JoinModal(
                     "from `1` to `21`.\n"
                     "`21` represents a Specialist character."
                 ),
-                ephemeral=True
+                ephemeral=True,
             )
             return
 
@@ -2421,7 +2476,7 @@ class JoinModal(
         if not cname:
             await interaction.response.send_message(
                 "❌ Character name can’t be empty.",
-                ephemeral=True
+                ephemeral=True,
             )
             return
 
@@ -2429,10 +2484,8 @@ class JoinModal(
             self.capped.value
         )
 
-        reward_dip = (
-            self._parse_reward_dip(
-                self.xp_dip.value
-            )
+        reward_dip = self._parse_reward_dip(
+            self.xp_dip.value
         )
 
         if reward_dip is None:
@@ -2441,7 +2494,7 @@ class JoinModal(
                     "❌ Reward DIP must be "
                     "`no`, `dip`, or `double dip`."
                 ),
-                ephemeral=True
+                ephemeral=True,
             )
             return
 
@@ -2454,7 +2507,7 @@ class JoinModal(
                     "❌ Double DIP is only "
                     "available to Specialist characters."
                 ),
-                ephemeral=True
+                ephemeral=True,
             )
             return
 
@@ -2473,10 +2526,8 @@ class JoinModal(
                 reward_dip
             )
 
-            has_gp_dip = (
-                self._is_yes(
-                    self.gp_dip.value
-                )
+            has_gp_dip = self._is_yes(
+                self.gp_dip.value
             )
 
         now = time.time()
@@ -2486,7 +2537,7 @@ class JoinModal(
             _,
             _,
             _,
-            _
+            _,
         ) = get_session(
             self.message_id
         )
@@ -2506,7 +2557,7 @@ class JoinModal(
                         AND user_id=%s
                 """, (
                     self.message_id,
-                    interaction.user.id
+                    interaction.user.id,
                 ))
 
                 row = cur.fetchone()
@@ -2582,7 +2633,7 @@ class JoinModal(
                     is_capped,
                     has_reward_dip,
                     has_gp_dip,
-                    is_specialist
+                    is_specialist,
                 ))
 
         tags = []
@@ -2641,7 +2692,7 @@ class JoinModal(
                     "Reward and GP dips are disabled "
                     "during the event."
                 ),
-                ephemeral=True
+                ephemeral=True,
             )
 
         else:
@@ -2650,7 +2701,7 @@ class JoinModal(
                     f"✅ Signed in: **{cname}** "
                     f"({display_level}){tag_txt}"
                 ),
-                ephemeral=True
+                ephemeral=True,
             )
 
         await update_tracker_message(
@@ -2663,7 +2714,7 @@ class JoinModal(
 # =========================
 class EndConfirmModal(
     discord.ui.Modal,
-    title="Confirm RP End"
+    title="Confirm RP End",
 ):
     confirm = discord.ui.TextInput(
         label=(
@@ -2671,12 +2722,12 @@ class EndConfirmModal(
             "the RP for EVERYONE"
         ),
         placeholder="yes",
-        max_length=10
+        max_length=10,
     )
 
     def __init__(
         self,
-        message_id: int
+        message_id: int,
     ):
         super().__init__()
 
@@ -2686,7 +2737,7 @@ class EndConfirmModal(
 
     async def on_submit(
         self,
-        interaction: discord.Interaction
+        interaction: discord.Interaction,
     ):
         if (
             str(
@@ -2699,22 +2750,22 @@ class EndConfirmModal(
                     "❌ RP end cancelled. "
                     "You must type `yes` exactly."
                 ),
-                ephemeral=True
+                ephemeral=True,
             )
             return
 
         await end_session_and_post_rewards(
             interaction,
-            self.message_id
+            self.message_id,
         )
 
 
 class EndConfirmView(
-    discord.ui.View
+    discord.ui.View,
 ):
     def __init__(
         self,
-        message_id: int
+        message_id: int,
     ):
         super().__init__(
             timeout=60
@@ -2726,12 +2777,12 @@ class EndConfirmView(
 
     @discord.ui.button(
         label="Confirm End RP",
-        style=discord.ButtonStyle.danger
+        style=discord.ButtonStyle.danger,
     )
     async def confirm_end(
         self,
         interaction: discord.Interaction,
-        button: discord.ui.Button
+        button: discord.ui.Button,
     ):
         await interaction.response.send_modal(
             EndConfirmModal(
@@ -2741,11 +2792,11 @@ class EndConfirmView(
 
 
 class RPView(
-    discord.ui.View
+    discord.ui.View,
 ):
     def __init__(
         self,
-        message_id: int
+        message_id: int,
     ):
         super().__init__(
             timeout=None
@@ -2761,7 +2812,7 @@ class RPView(
             custom_id=(
                 f"rp_join:{message_id}"
             ),
-            row=0
+            row=0,
         )
 
         self.leave_btn = discord.ui.Button(
@@ -2770,7 +2821,7 @@ class RPView(
             custom_id=(
                 f"rp_leave:{message_id}"
             ),
-            row=0
+            row=0,
         )
 
         self.rejoin_btn = discord.ui.Button(
@@ -2779,7 +2830,7 @@ class RPView(
             custom_id=(
                 f"rp_rejoin:{message_id}"
             ),
-            row=0
+            row=0,
         )
 
         self.start_btn = discord.ui.Button(
@@ -2788,7 +2839,7 @@ class RPView(
             custom_id=(
                 f"rp_start:{message_id}"
             ),
-            row=1
+            row=1,
         )
 
         self.pause_btn = discord.ui.Button(
@@ -2797,7 +2848,7 @@ class RPView(
             custom_id=(
                 f"rp_pause:{message_id}"
             ),
-            row=1
+            row=1,
         )
 
         self.resume_btn = discord.ui.Button(
@@ -2806,7 +2857,7 @@ class RPView(
             custom_id=(
                 f"rp_resume:{message_id}"
             ),
-            row=1
+            row=1,
         )
 
         self.end_btn = discord.ui.Button(
@@ -2815,7 +2866,7 @@ class RPView(
             custom_id=(
                 f"rp_end:{message_id}"
             ),
-            row=2
+            row=2,
         )
 
         self.join_btn.callback = (
@@ -2861,7 +2912,7 @@ class RPView(
 
     async def join_cb(
         self,
-        interaction: discord.Interaction
+        interaction: discord.Interaction,
     ):
         await interaction.response.send_modal(
             JoinModal(
@@ -2871,7 +2922,7 @@ class RPView(
 
     async def leave_cb(
         self,
-        interaction: discord.Interaction
+        interaction: discord.Interaction,
     ):
         now = time.time()
 
@@ -2888,7 +2939,7 @@ class RPView(
                         AND user_id=%s
                 """, (
                     self.message_id,
-                    interaction.user.id
+                    interaction.user.id,
                 ))
 
                 row = cur.fetchone()
@@ -2896,11 +2947,13 @@ class RPView(
                 if not row:
                     await interaction.response.send_message(
                         "You haven’t joined this RP yet.",
-                        ephemeral=True
+                        ephemeral=True,
                     )
                     return
 
-                last_tick = row[0]
+                last_tick = (
+                    row[0]
+                )
 
                 secs = float(
                     row[1]
@@ -2918,7 +2971,7 @@ class RPView(
                         now
                         - float(
                             last_tick
-                        )
+                        ),
                     )
 
                 cur.execute("""
@@ -2933,7 +2986,7 @@ class RPView(
                 """, (
                     secs,
                     self.message_id,
-                    interaction.user.id
+                    interaction.user.id,
                 ))
 
         await interaction.response.send_message(
@@ -2941,7 +2994,7 @@ class RPView(
                 "⏹ You’ve left. "
                 "Your personal RP timer is stopped."
             ),
-            ephemeral=True
+            ephemeral=True,
         )
 
         await update_tracker_message(
@@ -2950,14 +3003,14 @@ class RPView(
 
     async def rejoin_cb(
         self,
-        interaction: discord.Interaction
+        interaction: discord.Interaction,
     ):
         (
             state,
             _,
             _,
             _,
-            _
+            _,
         ) = get_session(
             self.message_id
         )
@@ -2973,7 +3026,7 @@ class RPView(
                         AND user_id=%s
                 """, (
                     self.message_id,
-                    interaction.user.id
+                    interaction.user.id,
                 ))
 
                 exists = (
@@ -2987,7 +3040,7 @@ class RPView(
                             "You haven’t joined yet. "
                             "Click **✅ Join** first."
                         ),
-                        ephemeral=True
+                        ephemeral=True,
                     )
                     return
 
@@ -3002,7 +3055,7 @@ class RPView(
                             AND user_id=%s
                     """, (
                         self.message_id,
-                        interaction.user.id
+                        interaction.user.id,
                     ))
 
                     await interaction.response.send_message(
@@ -3010,7 +3063,7 @@ class RPView(
                             "You’re marked present, "
                             "but the session isn’t running."
                         ),
-                        ephemeral=True
+                        ephemeral=True,
                     )
 
                     await update_tracker_message(
@@ -3032,7 +3085,7 @@ class RPView(
                 """, (
                     now,
                     self.message_id,
-                    interaction.user.id
+                    interaction.user.id,
                 ))
 
         await interaction.response.send_message(
@@ -3040,7 +3093,7 @@ class RPView(
                 "🔁 You’re back in. "
                 "Your timer is running again."
             ),
-            ephemeral=True
+            ephemeral=True,
         )
 
         await update_tracker_message(
@@ -3049,14 +3102,14 @@ class RPView(
 
     async def start_cb(
         self,
-        interaction: discord.Interaction
+        interaction: discord.Interaction,
     ):
         (
             state,
             _,
             run_seconds,
             _,
-            _
+            _,
         ) = get_session(
             self.message_id
         )
@@ -3064,7 +3117,7 @@ class RPView(
         if state == 1:
             await interaction.response.send_message(
                 "Already running.",
-                ephemeral=True
+                ephemeral=True,
             )
             return
 
@@ -3097,7 +3150,7 @@ class RPView(
                 """, (
                     self.message_id,
                     interaction.channel_id,
-                    interaction.guild_id
+                    interaction.guild_id,
                 ))
 
                 cur.execute("""
@@ -3118,7 +3171,7 @@ class RPView(
                         run_seconds
                         or 0.0
                     ),
-                    self.message_id
+                    self.message_id,
                 ))
 
                 cur.execute("""
@@ -3129,7 +3182,7 @@ class RPView(
                         AND present=1
                 """, (
                     now,
-                    self.message_id
+                    self.message_id,
                 ))
 
         await interaction.response.send_message(
@@ -3137,7 +3190,7 @@ class RPView(
                 "▶️ Session started. "
                 "The guild clock is running."
             ),
-            ephemeral=True
+            ephemeral=True,
         )
 
         if interaction.channel is not None:
@@ -3145,7 +3198,7 @@ class RPView(
                 interaction.channel,
                 "start",
                 interaction.user,
-                self.message_id
+                self.message_id,
             )
 
         await update_tracker_message(
@@ -3154,14 +3207,14 @@ class RPView(
 
     async def pause_cb(
         self,
-        interaction: discord.Interaction
+        interaction: discord.Interaction,
     ):
         (
             state,
             started_at,
             run_seconds,
             _,
-            _
+            _,
         ) = get_session(
             self.message_id
         )
@@ -3172,7 +3225,7 @@ class RPView(
         ):
             await interaction.response.send_message(
                 "Not currently running.",
-                ephemeral=True
+                ephemeral=True,
             )
             return
 
@@ -3188,7 +3241,7 @@ class RPView(
             + max(
                 0.0,
                 now
-                - started_at
+                - started_at,
             )
         )
 
@@ -3204,7 +3257,7 @@ class RPView(
                     WHERE message_id=%s
                 """, (
                     new_run,
-                    self.message_id
+                    self.message_id,
                 ))
 
                 cur.execute("""
@@ -3220,7 +3273,7 @@ class RPView(
 
         await interaction.response.send_message(
             "⏸ Session paused. Quills down.",
-            ephemeral=True
+            ephemeral=True,
         )
 
         if interaction.channel is not None:
@@ -3228,7 +3281,7 @@ class RPView(
                 interaction.channel,
                 "pause",
                 interaction.user,
-                self.message_id
+                self.message_id,
             )
 
         await update_tracker_message(
@@ -3237,14 +3290,14 @@ class RPView(
 
     async def resume_cb(
         self,
-        interaction: discord.Interaction
+        interaction: discord.Interaction,
     ):
         (
             state,
             _,
             run_seconds,
             _,
-            _
+            _,
         ) = get_session(
             self.message_id
         )
@@ -3252,7 +3305,7 @@ class RPView(
         if state != 2:
             await interaction.response.send_message(
                 "Not currently paused.",
-                ephemeral=True
+                ephemeral=True,
             )
             return
 
@@ -3274,7 +3327,7 @@ class RPView(
                         run_seconds
                         or 0.0
                     ),
-                    self.message_id
+                    self.message_id,
                 ))
 
                 cur.execute("""
@@ -3286,7 +3339,7 @@ class RPView(
                         AND last_tick=-1
                 """, (
                     now,
-                    self.message_id
+                    self.message_id,
                 ))
 
         await interaction.response.send_message(
@@ -3294,7 +3347,7 @@ class RPView(
                 "⏵ Session resumed. "
                 "The guild clock continues."
             ),
-            ephemeral=True
+            ephemeral=True,
         )
 
         if interaction.channel is not None:
@@ -3302,7 +3355,7 @@ class RPView(
                 interaction.channel,
                 "resume",
                 interaction.user,
-                self.message_id
+                self.message_id,
             )
 
         await update_tracker_message(
@@ -3311,7 +3364,7 @@ class RPView(
 
     async def end_cb(
         self,
-        interaction: discord.Interaction
+        interaction: discord.Interaction,
     ):
         embed = discord.Embed(
             title="⚠️ End RP Confirmation",
@@ -3323,7 +3376,7 @@ class RPView(
                 "Click the button below, then "
                 "type `yes` to confirm."
             ),
-            color=discord.Color.red()
+            color=discord.Color.red(),
         )
 
         await interaction.response.send_message(
@@ -3331,7 +3384,7 @@ class RPView(
             view=EndConfirmView(
                 self.message_id
             ),
-            ephemeral=True
+            ephemeral=True,
         )
 
 
@@ -3340,7 +3393,7 @@ class RPView(
 # =========================
 async def end_session_and_post_rewards(
     interaction: discord.Interaction,
-    message_id: int
+    message_id: int,
 ):
     if not interaction.response.is_done():
         await interaction.response.defer(
@@ -3352,7 +3405,7 @@ async def end_session_and_post_rewards(
         started_at,
         run_seconds,
         channel_id,
-        guild_id
+        guild_id,
     ) = get_session(
         message_id
     )
@@ -3367,7 +3420,7 @@ async def end_session_and_post_rewards(
                     "❌ Could not locate this "
                     "session in the ledger."
                 ),
-                ephemeral=True
+                ephemeral=True,
             )
 
         except Exception:
@@ -3391,7 +3444,7 @@ async def end_session_and_post_rewards(
             + max(
                 0.0,
                 now
-                - started_at
+                - started_at,
             )
         )
 
@@ -3414,7 +3467,7 @@ async def end_session_and_post_rewards(
                     or 0.0
                 ),
                 ended_at,
-                message_id
+                message_id,
             ))
 
             cur.execute("""
@@ -3430,17 +3483,11 @@ async def end_session_and_post_rewards(
             interaction.channel,
             "end",
             interaction.user,
-            message_id
+            message_id,
         )
 
     parts = list_participants(
         message_id
-    )
-
-    header = (
-        "🏁 **Guild Ledger Closed — Rewards Issued**\n"
-        "The registrar tallies the earnings "
-        "and stamps the record.\n"
     )
 
     lines = []
@@ -3453,7 +3500,7 @@ async def end_session_and_post_rewards(
         cap,
         reward_dip,
         gp_dip,
-        specialist
+        specialist,
     ) in parts:
 
         hrs = reward_hours(
@@ -3468,7 +3515,7 @@ async def end_session_and_post_rewards(
                 2: 6,
             }.get(
                 reward_dip,
-                SPECIALIST_RP_COINS_PER_HOUR
+                SPECIALIST_RP_COINS_PER_HOUR,
             )
 
             coins = (
@@ -3490,7 +3537,7 @@ async def end_session_and_post_rewards(
             special_add(
                 guild_id,
                 uid,
-                coins
+                coins,
             )
 
             specialist_tags = []
@@ -3575,7 +3622,7 @@ async def end_session_and_post_rewards(
                 keys_add(
                     guild_id,
                     uid,
-                    keys
+                    keys,
                 )
 
                 lines.append(
@@ -3624,33 +3671,25 @@ async def end_session_and_post_rewards(
                     )
 
                     if member is None:
-                        member = (
-                            await guild.fetch_member(
-                                uid
-                            )
+                        member = await guild.fetch_member(
+                            uid
                         )
 
-                    fresh_role = (
-                        discord.utils.get(
-                            guild.roles,
-                            name=(
-                                FRESH_ADVENTURER_ROLE_NAME
-                            )
-                        )
+                    fresh_role = discord.utils.get(
+                        guild.roles,
+                        name=FRESH_ADVENTURER_ROLE_NAME,
                     )
 
                     if (
                         member is not None
                         and fresh_role is not None
-                        and fresh_role
-                        in member.roles
+                        and fresh_role in member.roles
                     ):
                         await member.remove_roles(
                             fresh_role,
                             reason=(
-                                "Completed first "
-                                "RP session"
-                            )
+                                "Completed first RP session"
+                            ),
                         )
 
             except Exception:
@@ -3664,7 +3703,7 @@ async def end_session_and_post_rewards(
     start_link = tracker_url(
         guild_id,
         channel_id,
-        message_id
+        message_id,
     )
 
     end_link = None
@@ -3682,13 +3721,13 @@ async def end_session_and_post_rewards(
             event_type,
             event_message_id,
             ev_channel_id,
-            ev_guild_id
+            ev_guild_id,
         ) in events:
 
             jump = build_jump_link(
                 ev_guild_id,
                 ev_channel_id,
-                event_message_id
+                event_message_id,
             )
 
             if event_type == "start":
@@ -3714,7 +3753,7 @@ async def end_session_and_post_rewards(
         end_link = tracker_url(
             guild_id,
             channel_id,
-            message_id
+            message_id,
         )
 
     link_lines = [
@@ -3759,9 +3798,15 @@ async def end_session_and_post_rewards(
         )
 
         if (
-            len(current)
-            + len(addition)
-            + len(record_links)
+            len(
+                current
+            )
+            + len(
+                addition
+            )
+            + len(
+                record_links
+            )
             > 1900
         ):
             reward_chunks.append(
@@ -3787,7 +3832,7 @@ async def end_session_and_post_rewards(
     for chunk in reward_chunks:
         await interaction.followup.send(
             chunk,
-            wait=True
+            wait=True,
         )
 
     await update_tracker_message(
@@ -3803,10 +3848,10 @@ async def end_session_and_post_rewards(
     description=(
         "Post and pin the "
         "Adventurer’s Guild RP tracker."
-    )
+    ),
 )
 async def rpbegin(
-    interaction: discord.Interaction
+    interaction: discord.Interaction,
 ):
     await interaction.response.defer(
         thinking=False
@@ -3820,13 +3865,13 @@ async def rpbegin(
             ),
             description=(
                 "Preparing the session log."
-            )
+            ),
         )
     )
 
     msg = await interaction.followup.send(
         embed=temp,
-        wait=True
+        wait=True,
     )
 
     with db() as conn:
@@ -3856,7 +3901,7 @@ async def rpbegin(
             """, (
                 msg.id,
                 msg.channel.id,
-                interaction.guild_id
+                interaction.guild_id,
             ))
 
             cur.execute("""
@@ -3868,7 +3913,7 @@ async def rpbegin(
             """, (
                 msg.channel.id,
                 interaction.guild_id,
-                msg.id
+                msg.id,
             ))
 
     view = RPView(
@@ -3879,7 +3924,7 @@ async def rpbegin(
         embed=build_embed(
             msg.id
         ),
-        view=view
+        view=view,
     )
 
     bot.add_view(
@@ -3903,10 +3948,10 @@ async def rpbegin(
     description=(
         "End the active RP session "
         "in this channel/thread."
-    )
+    ),
 )
 async def rpend(
-    interaction: discord.Interaction
+    interaction: discord.Interaction,
 ):
     await interaction.response.defer(
         thinking=False
@@ -3929,7 +3974,7 @@ async def rpend(
                 LIMIT 1
             """, (
                 interaction.channel_id,
-                interaction.guild_id
+                interaction.guild_id,
             ))
 
             row = cur.fetchone()
@@ -3940,7 +3985,7 @@ async def rpend(
                 "❌ No active tracker found "
                 "in this channel."
             ),
-            ephemeral=True
+            ephemeral=True,
         )
         return
 
@@ -3948,7 +3993,7 @@ async def rpend(
         interaction,
         int(
             row[0]
-        )
+        ),
     )
 
 
@@ -3962,31 +4007,28 @@ async def key_cmd(
     ctx: commands.Context,
     amount: Optional[str] = None,
     *,
-    reason: Optional[str] = None
+    reason: Optional[str] = None,
 ):
     if ctx.guild is None:
         await ctx.send(
-            (
-                "❌ This command can only "
-                "be used in a server."
-            )
+            "❌ This command can only be used in a server."
         )
         return
 
     if amount is None:
         (
             current,
-            lifetime
+            lifetime,
         ) = keys_get(
             ctx.guild.id,
-            ctx.author.id
+            ctx.author.id,
         )
 
         await ctx.send(
             embed=build_key_embed(
                 ctx.author,
                 current,
-                lifetime
+                lifetime,
             )
         )
         return
@@ -3998,11 +4040,7 @@ async def key_cmd(
 
     except Exception:
         await ctx.send(
-            (
-                'Usage: `!key` or '
-                '`!key +3 "Reason"` or '
-                '`!key -2 "Reason"`'
-            )
+            'Usage: `!key` or `!key +3 "Reason"` or `!key -2 "Reason"`'
         )
         return
 
@@ -4016,22 +4054,24 @@ async def key_cmd(
         keys_add(
             ctx.guild.id,
             ctx.author.id,
-            delta
+            delta,
         )
 
     else:
         keys_sub(
             ctx.guild.id,
             ctx.author.id,
-            abs(delta)
+            abs(
+                delta
+            ),
         )
 
     (
         current,
-        lifetime
+        lifetime,
     ) = keys_get(
         ctx.guild.id,
-        ctx.author.id
+        ctx.author.id,
     )
 
     reason_text = (
@@ -4054,7 +4094,7 @@ async def key_cmd(
         embed=build_key_embed(
             ctx.author,
             current,
-            lifetime
+            lifetime,
         )
     )
 
@@ -4069,31 +4109,28 @@ async def special_cmd(
     ctx: commands.Context,
     amount: Optional[str] = None,
     *,
-    reason: Optional[str] = None
+    reason: Optional[str] = None,
 ):
     if ctx.guild is None:
         await ctx.send(
-            (
-                "❌ This command can only "
-                "be used in a server."
-            )
+            "❌ This command can only be used in a server."
         )
         return
 
     if amount is None:
         (
             current,
-            lifetime
+            lifetime,
         ) = special_get(
             ctx.guild.id,
-            ctx.author.id
+            ctx.author.id,
         )
 
         await ctx.send(
             embed=build_special_embed(
                 ctx.author,
                 current,
-                lifetime
+                lifetime,
             )
         )
         return
@@ -4105,11 +4142,7 @@ async def special_cmd(
 
     except Exception:
         await ctx.send(
-            (
-                'Usage: `!special` or '
-                '`!special +3 "Reason"` or '
-                '`!special -2 "Reason"`'
-            )
+            'Usage: `!special` or `!special +3 "Reason"` or `!special -2 "Reason"`'
         )
         return
 
@@ -4123,22 +4156,24 @@ async def special_cmd(
         special_add(
             ctx.guild.id,
             ctx.author.id,
-            delta
+            delta,
         )
 
     else:
         special_sub(
             ctx.guild.id,
             ctx.author.id,
-            abs(delta)
+            abs(
+                delta
+            ),
         )
 
     (
         current,
-        lifetime
+        lifetime,
     ) = special_get(
         ctx.guild.id,
-        ctx.author.id
+        ctx.author.id,
     )
 
     reason_text = (
@@ -4162,7 +4197,7 @@ async def special_cmd(
         embed=build_special_embed(
             ctx.author,
             current,
-            lifetime
+            lifetime,
         )
     )
 
@@ -4176,23 +4211,18 @@ async def special_cmd(
 async def loot_cmd(
     ctx: commands.Context,
     *,
-    item_name: Optional[str] = None
+    item_name: Optional[str] = None,
 ):
     if ctx.guild is None:
         await ctx.send(
-            (
-                "❌ This command can only "
-                "be used in a server."
-            )
+            "❌ This command can only be used in a server."
         )
         return
 
     if not item_name:
         await ctx.send(
-            (
-                "❌ Usage: `!loot Item Name`\n"
-                "Example: `!loot Flame Tongue`"
-            )
+            "❌ Usage: `!loot Item Name`\n"
+            "Example: `!loot Flame Tongue`"
         )
         return
 
@@ -4242,7 +4272,9 @@ async def loot_cmd(
             (
                 "🔎 **Multiple exact loot "
                 "entries were found:**\n\n"
-                + "\n".join(lines)
+                + "\n".join(
+                    lines
+                )
             )
         )
         return
@@ -4258,14 +4290,14 @@ async def loot_cmd(
 
         if not matches:
             await ctx.send(
-                (
-                    "❌ No loot item found matching "
-                    f"`{item_name}`."
-                )
+                f"❌ No loot item found matching `{item_name}`."
             )
             return
 
-        if len(matches) > 1:
+        if len(
+            matches
+        ) > 1:
+
             shown = (
                 matches[:15]
             )
@@ -4281,7 +4313,9 @@ async def loot_cmd(
 
             extra = ""
 
-            if len(matches) > 15:
+            if len(
+                matches
+            ) > 15:
                 extra = (
                     f"\n\n*And "
                     f"{len(matches) - 15} more. "
@@ -4292,7 +4326,9 @@ async def loot_cmd(
                 (
                     "🔎 **Multiple loot items "
                     f"match `{item_name}`:**\n\n"
-                    + "\n".join(lines)
+                    + "\n".join(
+                        lines
+                    )
                     + extra
                 )
             )
@@ -4306,32 +4342,32 @@ async def loot_cmd(
         title=(
             f"📦 {item['name']}"
         ),
-        color=theme_color()
+        color=theme_color(),
     )
 
     embed.add_field(
         name="Rarity",
         value=item["rarity"],
-        inline=False
+        inline=False,
     )
 
     embed.add_field(
         name="Shop Value",
         value=item["shop_value"],
-        inline=True
+        inline=True,
     )
 
     embed.add_field(
         name="Minimum Trade Value",
         value=item["min_trade"],
-        inline=True
+        inline=True,
     )
 
     embed = apply_theme(
         embed,
         footer_text_override=(
             "Guild Loot Registry"
-        )
+        ),
     )
 
     await ctx.send(
@@ -4348,7 +4384,7 @@ async def loot_cmd(
 async def newloot_cmd(
     ctx: commands.Context,
     *,
-    rarity: Optional[str] = None
+    rarity: Optional[str] = None,
 ):
     if ctx.guild is None:
         await ctx.send(
@@ -4400,7 +4436,10 @@ async def newloot_cmd(
         )
         return
 
-    item_name, _shop_price = item
+    (
+        item_name,
+        _shop_price,
+    ) = item
 
     await ctx.send(
         f"🎲 **{actual_rarity} Loot:** {item_name}"
@@ -4428,14 +4467,11 @@ PAYDAY_STAFF_ROLES = {
     name="reloadloot"
 )
 async def reloadloot_cmd(
-    ctx: commands.Context
+    ctx: commands.Context,
 ):
     if ctx.guild is None:
         await ctx.send(
-            (
-                "❌ This command can only "
-                "be used in a server."
-            )
+            "❌ This command can only be used in a server."
         )
         return
 
@@ -4450,10 +4486,7 @@ async def reloadloot_cmd(
         & PAYDAY_ALLOWED_ROLES
     ):
         await ctx.send(
-            (
-                "❌ Only The Hearth may "
-                "reload the loot registry."
-            )
+            "❌ Only The Hearth may reload the loot registry."
         )
         return
 
@@ -4490,7 +4523,7 @@ async def reloadloot_cmd(
         new_details.extend(
             load_loot_details_csv(
                 path,
-                rarity
+                rarity,
             )
         )
 
@@ -4518,14 +4551,11 @@ async def reloadloot_cmd(
     name="payday"
 )
 async def payday_cmd(
-    ctx: commands.Context
+    ctx: commands.Context,
 ):
     if ctx.guild is None:
         await ctx.send(
-            (
-                "❌ This command can only "
-                "be used in a server."
-            )
+            "❌ This command can only be used in a server."
         )
         return
 
@@ -4540,10 +4570,7 @@ async def payday_cmd(
         & PAYDAY_ALLOWED_ROLES
     ):
         await ctx.send(
-            (
-                "❌ Only The Hearth may "
-                "run staff payday."
-            )
+            "❌ Only The Hearth may run staff payday."
         )
         return
 
@@ -4568,7 +4595,7 @@ async def payday_cmd(
 
         for (
             role_name,
-            role_amount
+            role_amount,
         ) in PAYDAY_STAFF_ROLES.items():
 
             if (
@@ -4589,7 +4616,7 @@ async def payday_cmd(
             ] = {
                 "member": member,
                 "amount": amount,
-                "roles": matched_roles
+                "roles": matched_roles,
             }
 
     if not paid_users:
@@ -4607,7 +4634,7 @@ async def payday_cmd(
         keys_add(
             ctx.guild.id,
             data["member"].id,
-            data["amount"]
+            data["amount"],
         )
 
     lines = [
@@ -4624,10 +4651,14 @@ async def payday_cmd(
         "🗝️ **Staff Payday Issued**\n"
         "The Guild Registrar has paid "
         "eligible staff.\n\n"
-        + "\n".join(lines)
+        + "\n".join(
+            lines
+        )
     )
 
-    if len(out) > 1900:
+    if len(
+        out
+    ) > 1900:
         await ctx.send(
             (
                 "🗝️ **Staff Payday Issued**\n"
@@ -4647,7 +4678,7 @@ async def payday_cmd(
 # USER ID PARSER
 # =========================
 def parse_user_id(
-    token: str
+    token: str,
 ) -> Optional[int]:
 
     t = token.strip()
@@ -4662,7 +4693,9 @@ def parse_user_id(
             t = t[1:]
 
     if t.isdigit():
-        return int(t)
+        return int(
+            t
+        )
 
     return None
 
@@ -4674,7 +4707,7 @@ def parse_user_id(
 TRACK_TIMEZONE = ZoneInfo(
     os.getenv(
         "TRACK_TIMEZONE",
-        "America/Chicago"
+        "America/Chicago",
     )
 )
 
@@ -4688,7 +4721,7 @@ TRACK_DATE_RANGE_RE = re.compile(
 
 
 def parse_track_date(
-    value: str
+    value: str,
 ):
     value = (
         value.strip()
@@ -4696,12 +4729,12 @@ def parse_track_date(
 
     for fmt in (
         "%m/%d/%y",
-        "%m/%d/%Y"
+        "%m/%d/%Y",
     ):
         try:
             return datetime.strptime(
                 value,
-                fmt
+                fmt,
             ).date()
 
         except ValueError:
@@ -4714,7 +4747,7 @@ def parse_track_date(
 
 def get_track_date_range(
     start_text: str,
-    end_text: str
+    end_text: str,
 ):
     start_date = parse_track_date(
         start_text
@@ -4726,17 +4759,14 @@ def get_track_date_range(
 
     if end_date < start_date:
         raise ValueError(
-            (
-                "End date cannot be "
-                "before start date."
-            )
+            "End date cannot be before start date."
         )
 
     start_dt = datetime(
         start_date.year,
         start_date.month,
         start_date.day,
-        tzinfo=TRACK_TIMEZONE
+        tzinfo=TRACK_TIMEZONE,
     )
 
     next_day = (
@@ -4750,617 +4780,12 @@ def get_track_date_range(
         next_day.year,
         next_day.month,
         next_day.day,
-        tzinfo=TRACK_TIMEZONE
+        tzinfo=TRACK_TIMEZONE,
     )
 
     return (
         start_date,
         end_date,
         start_dt.timestamp(),
-        end_dt.timestamp()
+        end_dt.timestamp(),
     )
-
-
-async def resolve_track_member(
-    guild: discord.Guild,
-    value: str
-) -> Optional[discord.Member]:
-
-    value = (
-        value.strip()
-    )
-
-    uid = parse_user_id(
-        value
-    )
-
-    if uid is not None:
-        member = guild.get_member(
-            uid
-        )
-
-        if member is None:
-            try:
-                member = (
-                    await guild.fetch_member(
-                        uid
-                    )
-                )
-
-            except Exception:
-                return None
-
-        return member
-
-    search = (
-        value
-        .lstrip("@")
-        .lower()
-    )
-
-    def matches_member(
-        member: discord.Member
-    ) -> bool:
-
-        names = {
-            member.name.lower(),
-            member.display_name.lower(),
-            str(member).lower(),
-        }
-
-        global_name = getattr(
-            member,
-            "global_name",
-            None
-        )
-
-        if global_name:
-            names.add(
-                global_name.lower()
-            )
-
-        return (
-            search
-            in names
-        )
-
-    matches = [
-        member
-        for member
-        in guild.members
-        if matches_member(
-            member
-        )
-    ]
-
-    if len(matches) == 1:
-        return matches[0]
-
-    if not matches:
-        try:
-            fetched_matches = []
-
-            async for member in (
-                guild.fetch_members(
-                    limit=None
-                )
-            ):
-                if matches_member(
-                    member
-                ):
-                    fetched_matches.append(
-                        member
-                    )
-
-            if (
-                len(
-                    fetched_matches
-                )
-                == 1
-            ):
-                return (
-                    fetched_matches[0]
-                )
-
-        except Exception:
-            pass
-
-    return None
-
-
-@bot.command(
-    name="track"
-)
-async def track_cmd(
-    ctx: commands.Context,
-    *,
-    args: Optional[str] = None
-):
-    if ctx.guild is None:
-        await ctx.send(
-            (
-                "❌ This command can only "
-                "be used in a server."
-            )
-        )
-        return
-
-    author_roles = {
-        role.name
-        for role
-        in ctx.author.roles
-    }
-
-    if not (
-        author_roles
-        & PAYDAY_ALLOWED_ROLES
-    ):
-        await ctx.send(
-            (
-                "❌ Only The Hearth may "
-                "use the RP tracking command."
-            )
-        )
-        return
-
-    if not args:
-        await ctx.send(
-            (
-                "❌ Usage:\n"
-                "`!track rphours @user "
-                "10/1/26-10/19/26`\n"
-                "`!track rpsessions @user "
-                "10/1/26-10/19/26`\n"
-                "`!track rptop 5 "
-                "10/1/26-10/19/26`"
-            )
-        )
-        return
-
-    args = (
-        args.strip()
-    )
-
-    first_split = args.split(
-        maxsplit=1
-    )
-
-    mode = (
-        first_split[0]
-        .lower()
-    )
-
-    remainder = (
-        first_split[1].strip()
-        if len(
-            first_split
-        ) > 1
-        else ""
-    )
-
-    if mode not in (
-        "rphours",
-        "rpsessions",
-        "rptop"
-    ):
-        await ctx.send(
-            (
-                "❌ Tracking type must be "
-                "`rphours`, `rpsessions`, "
-                "or `rptop`."
-            )
-        )
-        return
-
-    date_match = (
-        TRACK_DATE_RANGE_RE.search(
-            remainder
-        )
-    )
-
-    if not date_match:
-        await ctx.send(
-            (
-                "❌ I couldn't read the "
-                "date range.\n"
-                "Use something like: "
-                "`10/1/26-10/19/26`"
-            )
-        )
-        return
-
-    start_text = (
-        date_match.group(1)
-    )
-
-    end_text = (
-        date_match.group(2)
-    )
-
-    try:
-        (
-            start_date,
-            end_date,
-            start_ts,
-            end_ts
-        ) = get_track_date_range(
-            start_text,
-            end_text
-        )
-
-    except ValueError as e:
-        await ctx.send(
-            f"❌ {e}"
-        )
-        return
-
-    display_range = (
-        f"{start_date.strftime('%m/%d/%Y')}"
-        " through "
-        f"{end_date.strftime('%m/%d/%Y')}"
-    )
-
-    if mode == "rptop":
-
-        amount_text = remainder[
-            :date_match.start()
-        ].strip()
-
-        try:
-            amount = int(
-                amount_text
-            )
-
-        except Exception:
-            await ctx.send(
-                (
-                    "❌ Usage: "
-                    "`!track rptop 5 "
-                    "10/1/26-10/19/26`"
-                )
-            )
-            return
-
-        if amount < 1:
-            await ctx.send(
-                (
-                    "❌ Leaderboard size "
-                    "must be at least 1."
-                )
-            )
-            return
-
-        if amount > 25:
-            await ctx.send(
-                (
-                    "❌ `rptop` can show "
-                    "a maximum of 25 users at once."
-                )
-            )
-            return
-
-        with db() as conn:
-            with conn.cursor() as cur:
-
-                cur.execute("""
-                    WITH rp_entries AS (
-                        SELECT
-                            p.user_id,
-                            p.message_id,
-                            FLOOR(
-                                (
-                                    GREATEST(
-                                        COALESCE(
-                                            p.seconds,
-                                            0
-                                        ),
-                                        0
-                                    )
-                                    + 900
-                                )
-                                / 3600.0
-                            )::INT
-                                AS rewarded_hours
-                        FROM participants AS p
-                        INNER JOIN sessions AS s
-                            ON s.message_id =
-                               p.message_id
-                        WHERE
-                            s.guild_id=%s
-                            AND s.ended_at
-                                IS NOT NULL
-                            AND s.ended_at >= %s
-                            AND s.ended_at < %s
-                    )
-                    SELECT
-                        user_id,
-                        COALESCE(
-                            SUM(
-                                rewarded_hours
-                            ),
-                            0
-                        ) AS total_hours,
-                        COUNT(*) FILTER (
-                            WHERE
-                                rewarded_hours >= 1
-                        ) AS rp_sessions
-                    FROM rp_entries
-                    GROUP BY user_id
-                    HAVING
-                        SUM(
-                            rewarded_hours
-                        ) > 0
-                    ORDER BY
-                        total_hours DESC,
-                        rp_sessions DESC,
-                        user_id ASC
-                    LIMIT %s
-                """, (
-                    ctx.guild.id,
-                    start_ts,
-                    end_ts,
-                    amount
-                ))
-
-                rows = (
-                    cur.fetchall()
-                )
-
-        if not rows:
-            await ctx.send(
-                (
-                    "📊 No rewarded RP activity "
-                    "was found for "
-                    f"**{display_range}**."
-                )
-            )
-            return
-
-        lines = []
-
-        for (
-            position,
-            (
-                user_id,
-                total_hours,
-                rp_sessions
-            )
-        ) in enumerate(
-            rows,
-            start=1
-        ):
-
-            user_id = int(
-                user_id
-            )
-
-            total_hours = int(
-                total_hours
-                or 0
-            )
-
-            rp_sessions = int(
-                rp_sessions
-                or 0
-            )
-
-            lines.append(
-                (
-                    f"**{position}.** "
-                    f"<@{user_id}> — "
-                    f"**{total_hours}h** — "
-                    f"**{rp_sessions} "
-                    "RP sessions**"
-                )
-            )
-
-        embed = discord.Embed(
-            title=(
-                "🏆 RP Activity Leaderboard"
-            ),
-            description=(
-                f"**{display_range}**\n\n"
-                + "\n".join(
-                    lines
-                )
-            ),
-            color=theme_color()
-        )
-
-        embed = apply_theme(
-            embed,
-            footer_text_override=(
-                "Hours are calculated using "
-                "rewarded RP hours."
-            )
-        )
-
-        await ctx.send(
-            embed=embed
-        )
-        return
-
-    target_text = remainder[
-        :date_match.start()
-    ].strip()
-
-    if not target_text:
-        await ctx.send(
-            (
-                f"❌ Usage: "
-                f"`!track {mode} @user "
-                "10/1/26-10/19/26`"
-            )
-        )
-        return
-
-    member = await resolve_track_member(
-        ctx.guild,
-        target_text
-    )
-
-    if member is None:
-        await ctx.send(
-            (
-                "❌ I couldn't uniquely "
-                "identify that user.\n"
-                "Use their Discord mention, "
-                "user ID, username, "
-                "or display name."
-            )
-        )
-        return
-
-    with db() as conn:
-        with conn.cursor() as cur:
-
-            cur.execute("""
-                WITH rp_entries AS (
-                    SELECT
-                        p.message_id,
-                        FLOOR(
-                            (
-                                GREATEST(
-                                    COALESCE(
-                                        p.seconds,
-                                        0
-                                    ),
-                                    0
-                                )
-                                + 900
-                            )
-                            / 3600.0
-                        )::INT
-                            AS rewarded_hours
-                    FROM participants AS p
-                    INNER JOIN sessions AS s
-                        ON s.message_id =
-                           p.message_id
-                    WHERE
-                        s.guild_id=%s
-                        AND p.user_id=%s
-                        AND s.ended_at
-                            IS NOT NULL
-                        AND s.ended_at >= %s
-                        AND s.ended_at < %s
-                )
-                SELECT
-                    COALESCE(
-                        SUM(
-                            rewarded_hours
-                        ),
-                        0
-                    ) AS total_hours,
-                    COUNT(*) FILTER (
-                        WHERE
-                            rewarded_hours >= 1
-                    ) AS rp_sessions
-                FROM rp_entries
-            """, (
-                ctx.guild.id,
-                member.id,
-                start_ts,
-                end_ts
-            ))
-
-            row = cur.fetchone()
-
-    total_hours = int(
-        row[0]
-        or 0
-    )
-
-    rp_sessions = int(
-        row[1]
-        or 0
-    )
-
-    if mode == "rphours":
-        embed = discord.Embed(
-            title="📊 RP Hours",
-            description=(
-                f"{member.mention}\n"
-                f"**{display_range}**\n\n"
-                "Rewarded RP Hours: "
-                f"**{total_hours}h**\n"
-                "Qualifying RP Sessions: "
-                f"**{rp_sessions}**"
-            ),
-            color=theme_color()
-        )
-
-    else:
-        embed = discord.Embed(
-            title="📊 RP Sessions",
-            description=(
-                f"{member.mention}\n"
-                f"**{display_range}**\n\n"
-                "Qualifying RP Sessions: "
-                f"**{rp_sessions}**\n"
-                "Rewarded RP Hours: "
-                f"**{total_hours}h**"
-            ),
-            color=theme_color()
-        )
-
-    embed = apply_theme(
-        embed,
-        footer_text_override=(
-            "A qualifying session is one "
-            "that earned at least "
-            "1 RP reward hour."
-        )
-    )
-
-    await ctx.send(
-        embed=embed
-    )
-
-
-# =========================
-# QUEST RECORDS: !qrecords
-# =========================
-@bot.command(
-    name="qrecords"
-)
-async def qrecords_cmd(
-    ctx: commands.Context,
-    *,
-    args: str
-):
-    if ctx.guild is None:
-        await ctx.send(
-            (
-                "❌ This command can only "
-                "be used in a server."
-            )
-        )
-        return
-
-    try:
-        args = (
-            args
-            .replace(
-                "“",
-                '"'
-            )
-            .replace(
-                "”",
-                '"'
-            )
-            .replace(
-                "’",
-                "'"
-            )
-        )
-
-        parts = shlex.split(
-            args
-        )
-
-    except Exception:
-        await ctx.send(
-            (
-                "❌ Could not parse. "
-                "Make sure your quotes "
-                "are closed properly
