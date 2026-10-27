@@ -368,12 +368,6 @@ def rarity_shift(
     level: int
 ) -> str:
 
-    if (
-        level >= 20
-        and roll == 100
-    ):
-        return "Artifact"
-
     idx = RARITY_ORDER.index(
         base
     )
@@ -601,8 +595,6 @@ def ensure_schema():
                 WHERE present IS NULL
             """)
 
-            # Backfill old RP completion dates using
-            # previously recorded End events.
             cur.execute("""
                 UPDATE sessions AS s
                 SET ended_at = e.ended_at
@@ -619,7 +611,6 @@ def ensure_schema():
                     AND s.ended_at IS NULL
             """)
 
-            # Indexes for RP tracking queries.
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS
                     idx_sessions_guild_ended
@@ -3443,12 +3434,6 @@ async def end_session_and_post_rewards(
         message_id
     )
 
-    header = (
-        "🏁 **Guild Ledger Closed — Rewards Issued**\n"
-        "The registrar tallies the earnings "
-        "and stamps the record.\n"
-    )
-
     lines = []
 
     for (
@@ -3618,10 +3603,6 @@ async def end_session_and_post_rewards(
                     f"{dip_txt}"
                 )
 
-        # =====================================
-        # First RP Completed
-        # -> Remove Fresh Adventurer
-        # =====================================
         if hrs > 0:
             try:
                 guild = (
@@ -3671,9 +3652,6 @@ async def end_session_and_post_rewards(
             "*(no participants)*"
         ]
 
-    # =========================
-    # BUILD ALL RP RECORD LINKS
-    # =========================
     start_link = tracker_url(
         guild_id,
         channel_id,
@@ -3749,9 +3727,6 @@ async def end_session_and_post_rewards(
         )
     )
 
-    # =========================
-    # BUILD REWARD MESSAGES
-    # =========================
     first_header = (
         "🏁 **Guild Ledger Closed — Rewards Issued**\n"
         "The registrar tallies the earnings "
@@ -3800,9 +3775,6 @@ async def end_session_and_post_rewards(
             + record_links
         )
 
-    # =========================
-    # POST ALL REWARD CHUNKS
-    # =========================
     for chunk in reward_chunks:
         await interaction.followup.send(
             chunk,
@@ -3985,10 +3957,7 @@ async def key_cmd(
 ):
     if ctx.guild is None:
         await ctx.send(
-            (
-                "❌ This command can only "
-                "be used in a server."
-            )
+            "❌ This command can only be used in a server."
         )
         return
 
@@ -4017,11 +3986,7 @@ async def key_cmd(
 
     except Exception:
         await ctx.send(
-            (
-                'Usage: `!key` or '
-                '`!key +3 "Reason"` or '
-                '`!key -2 "Reason"`'
-            )
+            'Usage: `!key` or `!key +3 "Reason"` or `!key -2 "Reason"`'
         )
         return
 
@@ -4092,10 +4057,7 @@ async def special_cmd(
 ):
     if ctx.guild is None:
         await ctx.send(
-            (
-                "❌ This command can only "
-                "be used in a server."
-            )
+            "❌ This command can only be used in a server."
         )
         return
 
@@ -4124,11 +4086,7 @@ async def special_cmd(
 
     except Exception:
         await ctx.send(
-            (
-                'Usage: `!special` or '
-                '`!special +3 "Reason"` or '
-                '`!special -2 "Reason"`'
-            )
+            'Usage: `!special` or `!special +3 "Reason"` or `!special -2 "Reason"`'
         )
         return
 
@@ -4199,19 +4157,14 @@ async def loot_cmd(
 ):
     if ctx.guild is None:
         await ctx.send(
-            (
-                "❌ This command can only "
-                "be used in a server."
-            )
+            "❌ This command can only be used in a server."
         )
         return
 
     if not item_name:
         await ctx.send(
-            (
-                "❌ Usage: `!loot Item Name`\n"
-                "Example: `!loot Flame Tongue`"
-            )
+            "❌ Usage: `!loot Item Name`\n"
+            "Example: `!loot Flame Tongue`"
         )
         return
 
@@ -4277,10 +4230,7 @@ async def loot_cmd(
 
         if not matches:
             await ctx.send(
-                (
-                    "❌ No loot item found matching "
-                    f"`{item_name}`."
-                )
+                f"❌ No loot item found matching `{item_name}`."
             )
             return
 
@@ -4357,6 +4307,7 @@ async def loot_cmd(
         embed=embed
     )
 
+
 # =========================
 # RANDOM LOOT: !newloot
 # =========================
@@ -4424,6 +4375,7 @@ async def newloot_cmd(
         f"🎲 **{actual_rarity} Loot:** {item_name}"
     )
 
+
 # =========================
 # STAFF PERMISSIONS
 # =========================
@@ -4449,10 +4401,7 @@ async def reloadloot_cmd(
 ):
     if ctx.guild is None:
         await ctx.send(
-            (
-                "❌ This command can only "
-                "be used in a server."
-            )
+            "❌ This command can only be used in a server."
         )
         return
 
@@ -4467,10 +4416,7 @@ async def reloadloot_cmd(
         & PAYDAY_ALLOWED_ROLES
     ):
         await ctx.send(
-            (
-                "❌ Only The Hearth may "
-                "reload the loot registry."
-            )
+            "❌ Only The Hearth may reload the loot registry."
         )
         return
 
@@ -4539,10 +4485,7 @@ async def payday_cmd(
 ):
     if ctx.guild is None:
         await ctx.send(
-            (
-                "❌ This command can only "
-                "be used in a server."
-            )
+            "❌ This command can only be used in a server."
         )
         return
 
@@ -4557,10 +4500,7 @@ async def payday_cmd(
         & PAYDAY_ALLOWED_ROLES
     ):
         await ctx.send(
-            (
-                "❌ Only The Hearth may "
-                "run staff payday."
-            )
+            "❌ Only The Hearth may run staff payday."
         )
         return
 
@@ -4743,10 +4683,7 @@ def get_track_date_range(
 
     if end_date < start_date:
         raise ValueError(
-            (
-                "End date cannot be "
-                "before start date."
-            )
+            "End date cannot be before start date."
         )
 
     start_dt = datetime(
@@ -4895,14 +4832,10 @@ async def track_cmd(
 ):
     if ctx.guild is None:
         await ctx.send(
-            (
-                "❌ This command can only "
-                "be used in a server."
-            )
+            "❌ This command can only be used in a server."
         )
         return
 
-    # The Hearth only.
     author_roles = {
         role.name
         for role
@@ -4914,10 +4847,7 @@ async def track_cmd(
         & PAYDAY_ALLOWED_ROLES
     ):
         await ctx.send(
-            (
-                "❌ Only The Hearth may "
-                "use the RP tracking command."
-            )
+            "❌ Only The Hearth may use the RP tracking command."
         )
         return
 
@@ -4925,12 +4855,9 @@ async def track_cmd(
         await ctx.send(
             (
                 "❌ Usage:\n"
-                "`!track rphours @user "
-                "10/1/26-10/19/26`\n"
-                "`!track rpsessions @user "
-                "10/1/26-10/19/26`\n"
-                "`!track rptop 5 "
-                "10/1/26-10/19/26`"
+                "`!track rphours @user 10/1/26-10/19/26`\n"
+                "`!track rpsessions @user 10/1/26-10/19/26`\n"
+                "`!track rptop 5 10/1/26-10/19/26`"
             )
         )
         return
@@ -4962,11 +4889,8 @@ async def track_cmd(
         "rptop"
     ):
         await ctx.send(
-            (
-                "❌ Tracking type must be "
-                "`rphours`, `rpsessions`, "
-                "or `rptop`."
-            )
+            "❌ Tracking type must be "
+            "`rphours`, `rpsessions`, or `rptop`."
         )
         return
 
@@ -4979,10 +4903,8 @@ async def track_cmd(
     if not date_match:
         await ctx.send(
             (
-                "❌ I couldn't read the "
-                "date range.\n"
-                "Use something like: "
-                "`10/1/26-10/19/26`"
+                "❌ I couldn't read the date range.\n"
+                "Use something like: `10/1/26-10/19/26`"
             )
         )
         return
@@ -5018,9 +4940,6 @@ async def track_cmd(
         f"{end_date.strftime('%m/%d/%Y')}"
     )
 
-    # =====================================
-    # !track rptop
-    # =====================================
     if mode == "rptop":
 
         amount_text = remainder[
@@ -5034,29 +4953,19 @@ async def track_cmd(
 
         except Exception:
             await ctx.send(
-                (
-                    "❌ Usage: "
-                    "`!track rptop 5 "
-                    "10/1/26-10/19/26`"
-                )
+                "❌ Usage: `!track rptop 5 10/1/26-10/19/26`"
             )
             return
 
         if amount < 1:
             await ctx.send(
-                (
-                    "❌ Leaderboard size "
-                    "must be at least 1."
-                )
+                "❌ Leaderboard size must be at least 1."
             )
             return
 
         if amount > 25:
             await ctx.send(
-                (
-                    "❌ `rptop` can show "
-                    "a maximum of 25 users at once."
-                )
+                "❌ `rptop` can show a maximum of 25 users at once."
             )
             return
 
@@ -5129,11 +5038,7 @@ async def track_cmd(
 
         if not rows:
             await ctx.send(
-                (
-                    "📊 No rewarded RP activity "
-                    "was found for "
-                    f"**{display_range}**."
-                )
+                f"📊 No rewarded RP activity was found for **{display_range}**."
             )
             return
 
@@ -5170,8 +5075,7 @@ async def track_cmd(
                     f"**{position}.** "
                     f"<@{user_id}> — "
                     f"**{total_hours}h** — "
-                    f"**{rp_sessions} "
-                    "RP sessions**"
+                    f"**{rp_sessions} RP sessions**"
                 )
             )
 
@@ -5191,8 +5095,7 @@ async def track_cmd(
         embed = apply_theme(
             embed,
             footer_text_override=(
-                "Hours are calculated using "
-                "rewarded RP hours."
+                "Hours are calculated using rewarded RP hours."
             )
         )
 
@@ -5201,21 +5104,13 @@ async def track_cmd(
         )
         return
 
-    # =====================================
-    # !track rphours
-    # !track rpsessions
-    # =====================================
     target_text = remainder[
         :date_match.start()
     ].strip()
 
     if not target_text:
         await ctx.send(
-            (
-                f"❌ Usage: "
-                f"`!track {mode} @user "
-                "10/1/26-10/19/26`"
-            )
+            f"❌ Usage: `!track {mode} @user 10/1/26-10/19/26`"
         )
         return
 
@@ -5227,11 +5122,8 @@ async def track_cmd(
     if member is None:
         await ctx.send(
             (
-                "❌ I couldn't uniquely "
-                "identify that user.\n"
-                "Use their Discord mention, "
-                "user ID, username, "
-                "or display name."
+                "❌ I couldn't uniquely identify that user.\n"
+                "Use their Discord mention, user ID, username, or display name."
             )
         )
         return
@@ -5306,10 +5198,8 @@ async def track_cmd(
             description=(
                 f"{member.mention}\n"
                 f"**{display_range}**\n\n"
-                "Rewarded RP Hours: "
-                f"**{total_hours}h**\n"
-                "Qualifying RP Sessions: "
-                f"**{rp_sessions}**"
+                f"Rewarded RP Hours: **{total_hours}h**\n"
+                f"Qualifying RP Sessions: **{rp_sessions}**"
             ),
             color=theme_color()
         )
@@ -5320,10 +5210,8 @@ async def track_cmd(
             description=(
                 f"{member.mention}\n"
                 f"**{display_range}**\n\n"
-                "Qualifying RP Sessions: "
-                f"**{rp_sessions}**\n"
-                "Rewarded RP Hours: "
-                f"**{total_hours}h**"
+                f"Qualifying RP Sessions: **{rp_sessions}**\n"
+                f"Rewarded RP Hours: **{total_hours}h**"
             ),
             color=theme_color()
         )
@@ -5332,8 +5220,7 @@ async def track_cmd(
         embed,
         footer_text_override=(
             "A qualifying session is one "
-            "that earned at least "
-            "1 RP reward hour."
+            "that earned at least 1 RP reward hour."
         )
     )
 
@@ -5355,10 +5242,7 @@ async def qrecords_cmd(
 ):
     if ctx.guild is None:
         await ctx.send(
-            (
-                "❌ This command can only "
-                "be used in a server."
-            )
+            "❌ This command can only be used in a server."
         )
         return
 
@@ -5385,11 +5269,7 @@ async def qrecords_cmd(
 
     except Exception:
         await ctx.send(
-            (
-                "❌ Could not parse. "
-                "Make sure your quotes "
-                "are closed properly."
-            )
+            "❌ Could not parse. Make sure your quotes are closed properly."
         )
         return
 
@@ -5402,8 +5282,7 @@ async def qrecords_cmd(
                 '"gp-min/gp-max" '
                 '"loot/none" '
                 '@p char level ...\n'
-                'Use level `21` for a '
-                'Specialist character.'
+                'Use level `21` for a Specialist character.'
             )
         )
         return
@@ -5453,17 +5332,18 @@ async def qrecords_cmd(
         != 0
     ):
         await ctx.send(
-            (
-                "❌ Player list must be "
-                "groups of 3: "
-                "@player CharacterName Level"
-            )
+            "❌ Player list must be groups of 3: @player CharacterName Level"
         )
         return
 
     lines: List[str] = []
 
     pending_specialist_coins: Dict[
+        int,
+        int
+    ] = {}
+
+    pending_player_keys: Dict[
         int,
         int
     ] = {}
@@ -5487,10 +5367,7 @@ async def qrecords_cmd(
 
         if uid is None:
             await ctx.send(
-                (
-                    "❌ Couldn't read player "
-                    f"mention/id: `{user_tok}`"
-                )
+                f"❌ Couldn't read player mention/id: `{user_tok}`"
             )
             return
 
@@ -5511,11 +5388,7 @@ async def qrecords_cmd(
 
         if member is None:
             await ctx.send(
-                (
-                    "❌ Couldn't find that "
-                    "member in this server: "
-                    f"`{user_tok}`"
-                )
+                f"❌ Couldn't find that member in this server: `{user_tok}`"
             )
             return
 
@@ -5593,6 +5466,16 @@ async def qrecords_cmd(
 
             xp = None
             xp_keys = 4
+
+            pending_player_keys[
+                uid
+            ] = (
+                pending_player_keys.get(
+                    uid,
+                    0
+                )
+                + xp_keys
+            )
 
         else:
             (
@@ -5683,741 +5566,3 @@ async def qrecords_cmd(
         elif lvl == 20:
             reward_str = (
                 f"{xp_keys} 🗝️, "
-                f"{gp} gp"
-            )
-
-        else:
-            reward_str = (
-                f"{xp} xp, "
-                f"{gp} gp"
-            )
-
-        reward_bits = (
-            reward_str
-        )
-
-        if do_loot:
-            reward_bits += (
-                f", {loot_txt}, "
-                "(Grandmaster rolled: "
-                f"{gm_roll})"
-            )
-
-        else:
-            reward_bits += (
-                ", none"
-            )
-
-        tier_display = (
-            "Specialist"
-            if lvl == 21
-            else str(lvl)
-        )
-
-        lines.append(
-            (
-                f"{member.mention} - "
-                f"{char} "
-                f"{tier_display} - "
-                f"||{reward_bits}||"
-            )
-        )
-
-    DM_KEYS = 10
-
-    if DOUBLE_QUEST_EVENT_ACTIVE:
-        DM_KEYS *= 2
-
-    out = (
-        f"Quest Name: {qname}\n"
-        f"Quest Description: {qdesc}\n"
-        f"Quest Difficulty: {diff}\n"
-        + "\n".join(
-            lines
-        )
-        + f"\nDM ||{DM_KEYS} 🗝️||"
-    )
-
-    if len(out) > 1900:
-        await ctx.send(
-            (
-                "❌ Output too long for one message. "
-                "Run with fewer players "
-                "or shorter text."
-            )
-        )
-        return
-
-    for (
-        specialist_user_id,
-        coin_amount
-    ) in (
-        pending_specialist_coins.items()
-    ):
-        special_add(
-            ctx.guild.id,
-            specialist_user_id,
-            coin_amount
-        )
-
-    keys_add(
-        ctx.guild.id,
-        ctx.author.id,
-        DM_KEYS
-    )
-
-    await ctx.send(
-        out
-    )
-
-
-# =========================
-# ARCANE EXCHANGE
-# =========================
-@bot.command(
-    name="arcaneexchange"
-)
-async def arcaneexchange_cmd(
-    ctx: commands.Context
-):
-    if ctx.guild is None:
-        await ctx.send(
-            (
-                "❌ This command can only "
-                "be used in a server."
-            )
-        )
-        return
-
-    author_roles = {
-        role.name
-        for role
-        in ctx.author.roles
-    }
-
-    if not (
-        author_roles
-        & PAYDAY_ALLOWED_ROLES
-    ):
-        await ctx.send(
-            (
-                "❌ Only The Hearth may "
-                "use the Arcane Exchange."
-            )
-        )
-        return
-
-    rarity_counts = {
-        "Legendary": 4,
-        "Very Rare": 6,
-        "Rare": 6,
-        "Uncommon": 6,
-        "Common": 6,
-    }
-
-    output_lines = []
-
-    for rarity in [
-        "Legendary",
-        "Very Rare",
-        "Rare",
-        "Uncommon",
-        "Common"
-    ]:
-
-        pool = LOOT_TABLE.get(
-            rarity,
-            []
-        )
-
-        if not pool:
-            section = [
-                f"**__{rarity}__**",
-                "(No items loaded)"
-            ]
-
-            output_lines.append(
-                "\n".join(
-                    section
-                )
-            )
-
-            continue
-
-        count = min(
-            rarity_counts[
-                rarity
-            ],
-            len(pool)
-        )
-
-        items = random.sample(
-            pool,
-            count
-        )
-
-        item_width = max(
-            len(name)
-            for (
-                name,
-                _price
-            ) in items
-        )
-
-        price_width = max(
-            len(price)
-            for (
-                _name,
-                price
-            ) in items
-        )
-
-        section = [
-            f"**__{rarity}__**",
-            "```"
-        ]
-
-        for (
-            name,
-            price
-        ) in items:
-
-            section.append(
-                (
-                    f"{name:<{item_width}}  "
-                    f"{price:>{price_width}}"
-                )
-            )
-
-        section.append(
-            "```"
-        )
-
-        output_lines.append(
-            "\n".join(
-                section
-            )
-        )
-
-    final_output = (
-        "\n\n".join(
-            output_lines
-        )
-    )
-
-    if len(
-        final_output
-    ) > 1900:
-
-        await ctx.send(
-            "❌ Output too long."
-        )
-        return
-
-    await ctx.send(
-        final_output
-    )
-
-
-# =========================
-# APPROVE COMMAND: !approve
-# =========================
-ALLOWED_APPROVE_ROLES = {
-    "Stewards",
-    "The Hearth",
-    "DM"
-}
-
-APPROVE_REMOVE_ROLES = {
-    "Applicant"
-}
-
-APPROVE_ADD_ROLES = {
-    "Guild Initiate",
-    "Apprentice (2-4)",
-    "Fresh Adventurer"
-}
-
-GUILD_AMBASSADOR_ROLE_NAME = (
-    "Guild Ambassador"
-)
-
-FRESH_ADVENTURER_ROLE_NAME = (
-    "Fresh Adventurer"
-)
-
-
-@bot.command(
-    name="approve"
-)
-async def approve_cmd(
-    ctx: commands.Context,
-    member: Optional[
-        discord.Member
-    ] = None
-):
-    print(
-        (
-            f"!approve called by "
-            f"{ctx.author} "
-            f"with member={member}"
-        ),
-        flush=True
-    )
-
-    if ctx.guild is None:
-        await ctx.send(
-            (
-                "❌ This command can only "
-                "be used in a server."
-            )
-        )
-        return
-
-    if member is None:
-        await ctx.send(
-            "❌ Usage: `!approve @player`"
-        )
-        return
-
-    author_role_names = {
-        role.name
-        for role
-        in ctx.author.roles
-    }
-
-    if not (
-        author_role_names
-        & ALLOWED_APPROVE_ROLES
-    ):
-        await ctx.send(
-            (
-                "❌ Only members with the "
-                "Stewards, The Hearth, "
-                "or DM role may use this command."
-            )
-        )
-        return
-
-    guild = (
-        ctx.guild
-    )
-
-    roles_to_remove = []
-
-    for name in APPROVE_REMOVE_ROLES:
-
-        role = discord.utils.get(
-            guild.roles,
-            name=name
-        )
-
-        if role is None:
-            await ctx.send(
-                (
-                    "❌ Could not find "
-                    f"the role: `{name}`"
-                )
-            )
-            return
-
-        roles_to_remove.append(
-            role
-        )
-
-    roles_to_add = []
-
-    for name in APPROVE_ADD_ROLES:
-
-        role = discord.utils.get(
-            guild.roles,
-            name=name
-        )
-
-        if role is None:
-            await ctx.send(
-                (
-                    "❌ Could not find "
-                    f"the role: `{name}`"
-                )
-            )
-            return
-
-        roles_to_add.append(
-            role
-        )
-
-    ambassador_role = (
-        discord.utils.get(
-            guild.roles,
-            name=(
-                GUILD_AMBASSADOR_ROLE_NAME
-            )
-        )
-    )
-
-    if ambassador_role is None:
-        await ctx.send(
-            (
-                "❌ Could not find the role: "
-                f"`{GUILD_AMBASSADOR_ROLE_NAME}`"
-            )
-        )
-        return
-
-    me = (
-        guild.me
-        or guild.get_member(
-            bot.user.id
-        )
-    )
-
-    if me is None:
-        await ctx.send(
-            (
-                "❌ I couldn't verify "
-                "my server permissions."
-            )
-        )
-        return
-
-    if not (
-        me.guild_permissions.manage_roles
-    ):
-        await ctx.send(
-            (
-                "❌ I need the **Manage Roles** "
-                "permission to do that."
-            )
-        )
-        return
-
-    for role in (
-        roles_to_remove
-        + roles_to_add
-    ):
-        if (
-            me.top_role
-            <= role
-        ):
-            await ctx.send(
-                (
-                    "❌ My bot role must be higher "
-                    f"than `{role.name}` "
-                    "to manage it."
-                )
-            )
-            return
-
-    if (
-        me.top_role
-        <= member.top_role
-    ):
-        await ctx.send(
-            (
-                "❌ My bot role must be higher "
-                "than that member’s top role "
-                "to edit their roles."
-            )
-        )
-        return
-
-    try:
-        if roles_to_remove:
-            await member.remove_roles(
-                *roles_to_remove,
-                reason=(
-                    f"Approved by "
-                    f"{ctx.author}"
-                )
-            )
-
-        if roles_to_add:
-            await member.add_roles(
-                *roles_to_add,
-                reason=(
-                    f"Approved by "
-                    f"{ctx.author}"
-                )
-            )
-
-    except discord.Forbidden:
-        await ctx.send(
-            (
-                "❌ Discord denied the role update. "
-                "Check role hierarchy "
-                "and permissions."
-            )
-        )
-        return
-
-    except discord.HTTPException as e:
-        await ctx.send(
-            (
-                "❌ Failed to update roles: "
-                f"{e}"
-            )
-        )
-        return
-
-    embed = discord.Embed(
-        title=(
-            "Welcome to the Guild! ✅"
-        ),
-        description=(
-            f"{member.mention} you're approved!\n\n"
-            "First, check out "
-            "https://discord.com/channels/1464479110666649790/1464503181873647616 "
-            "to select your preferred roles.\n\n"
-
-            "**Our Guild Rules:**\n"
-            "https://discord.com/channels/1464479110666649790/1557762596004827166\n\n"
-
-            "**Want to chat with your fellow Guild Members?**\n"
-            "https://discord.com/channels/1464479110666649790/1464523819309076532\n\n"
-
-            "**Rules for RP?**\n"
-            "https://discord.com/channels/1464479110666649790/1469524380408217833\n\n"
-
-            "**Want to join an RP?**\n"
-            "https://discord.com/channels/1464479110666649790/1464489594627162348\n\n"
-
-            "Any further questions, do not hesitate to ping "
-            f"{ambassador_role.mention} "
-            "in "
-            "https://discord.com/channels/1464479110666649790/1480193099195089056 "
-            "for a guided tour of the server "
-            "and how things work! 😁"
-        ),
-        color=theme_color()
-    )
-
-    embed = apply_theme(
-        embed
-    )
-
-    banner = os.getenv(
-        "THEME_BANNER_URL"
-    )
-
-    if banner:
-        embed.set_image(
-            url=banner
-        )
-
-    await ctx.send(
-        embed=embed
-    )
-
-
-# =========================
-# ERROR HANDLER
-# =========================
-@bot.tree.error
-async def on_app_command_error(
-    interaction: discord.Interaction,
-    error: Exception
-):
-    original = getattr(
-        error,
-        "original",
-        None
-    )
-
-    shown = (
-        original
-        if original
-        else error
-    )
-
-    print(
-        "Slash command error:",
-        repr(shown),
-        flush=True
-    )
-
-    traceback.print_exception(
-        type(shown),
-        shown,
-        shown.__traceback__
-    )
-
-    msg = (
-        f"❌ Error: "
-        f"`{type(shown).__name__}` — "
-        f"{shown}"
-    )
-
-    try:
-        if interaction.response.is_done():
-
-            await interaction.followup.send(
-                msg[:1900],
-                ephemeral=True
-            )
-
-        else:
-            await interaction.response.send_message(
-                msg[:1900],
-                ephemeral=True
-            )
-
-    except Exception:
-        pass
-
-
-# =========================
-# ERROR HANDLER PREFIX
-# =========================
-@bot.event
-async def on_command_error(
-    ctx: commands.Context,
-    error: Exception
-):
-    if isinstance(
-        error,
-        commands.MemberNotFound
-    ):
-        await ctx.send(
-            (
-                "❌ I couldn't find that member. "
-                "Try `!approve @player`."
-            )
-        )
-        return
-
-    if isinstance(
-        error,
-        commands.MissingRequiredArgument
-    ):
-        command_name = (
-            ctx.command.qualified_name
-            if ctx.command
-            else ""
-        )
-
-        if command_name == "approve":
-            await ctx.send(
-                "❌ Usage: `!approve @player`"
-            )
-
-        elif command_name == "qrecords":
-            await ctx.send(
-                (
-                    '❌ Usage: !qrecords '
-                    '"Name" "Desc" "Difficulty" '
-                    '"xp-min/xp-max" '
-                    '"gp-min/gp-max" '
-                    '"loot/none" '
-                    '@p char level ...'
-                )
-            )
-
-        else:
-            await ctx.send(
-                (
-                    "❌ That command is missing "
-                    "a required argument."
-                )
-            )
-
-        return
-
-    if isinstance(
-        error,
-        commands.CommandNotFound
-    ):
-        return
-
-    print(
-        "Prefix command error:",
-        repr(error),
-        flush=True
-    )
-
-    traceback.print_exception(
-        type(error),
-        error,
-        error.__traceback__
-    )
-
-    await ctx.send(
-        (
-            "❌ Command error: "
-            f"`{type(error).__name__}` — "
-            f"{error}"
-        )
-    )
-
-
-# =========================
-# READY
-# =========================
-@bot.event
-async def on_ready():
-    with db() as conn:
-        with conn.cursor() as cur:
-
-            cur.execute("""
-                SELECT message_id
-                FROM sessions
-            """)
-
-            msg_ids = [
-                int(r[0])
-                for r
-                in cur.fetchall()
-            ]
-
-    for mid in msg_ids:
-        bot.add_view(
-            RPView(
-                mid
-            )
-        )
-
-    try:
-        await bot.tree.sync()
-
-        print(
-            "Slash commands synced.",
-            flush=True
-        )
-
-    except Exception as e:
-        print(
-            "Command sync failed:",
-            repr(e),
-            flush=True
-        )
-
-        traceback.print_exc()
-
-    print(
-        (
-            f"Logged in as {bot.user} "
-            f"(guilds={len(bot.guilds)})"
-        ),
-        flush=True
-    )
-
-
-# =========================
-# MAIN
-# =========================
-async def main():
-    await start_web_server()
-
-    asyncio.create_task(
-        ticker_loop()
-    )
-
-    await bot.start(
-        TOKEN
-    )
-
-
-if __name__ == "__main__":
-    asyncio.run(
-        main()
-    )
