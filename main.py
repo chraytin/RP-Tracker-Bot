@@ -595,6 +595,8 @@ def ensure_schema():
                 WHERE present IS NULL
             """)
 
+            # Backfill old RP completion dates using
+            # previously recorded End events.
             cur.execute("""
                 UPDATE sessions AS s
                 SET ended_at = e.ended_at
@@ -611,6 +613,7 @@ def ensure_schema():
                     AND s.ended_at IS NULL
             """)
 
+            # Indexes for RP tracking queries.
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS
                     idx_sessions_guild_ended
@@ -3434,6 +3437,12 @@ async def end_session_and_post_rewards(
         message_id
     )
 
+    header = (
+        "🏁 **Guild Ledger Closed — Rewards Issued**\n"
+        "The registrar tallies the earnings "
+        "and stamps the record.\n"
+    )
+
     lines = []
 
     for (
@@ -3957,7 +3966,10 @@ async def key_cmd(
 ):
     if ctx.guild is None:
         await ctx.send(
-            "❌ This command can only be used in a server."
+            (
+                "❌ This command can only "
+                "be used in a server."
+            )
         )
         return
 
@@ -3986,7 +3998,11 @@ async def key_cmd(
 
     except Exception:
         await ctx.send(
-            'Usage: `!key` or `!key +3 "Reason"` or `!key -2 "Reason"`'
+            (
+                'Usage: `!key` or '
+                '`!key +3 "Reason"` or '
+                '`!key -2 "Reason"`'
+            )
         )
         return
 
@@ -4057,7 +4073,10 @@ async def special_cmd(
 ):
     if ctx.guild is None:
         await ctx.send(
-            "❌ This command can only be used in a server."
+            (
+                "❌ This command can only "
+                "be used in a server."
+            )
         )
         return
 
@@ -4086,7 +4105,11 @@ async def special_cmd(
 
     except Exception:
         await ctx.send(
-            'Usage: `!special` or `!special +3 "Reason"` or `!special -2 "Reason"`'
+            (
+                'Usage: `!special` or '
+                '`!special +3 "Reason"` or '
+                '`!special -2 "Reason"`'
+            )
         )
         return
 
@@ -4157,14 +4180,19 @@ async def loot_cmd(
 ):
     if ctx.guild is None:
         await ctx.send(
-            "❌ This command can only be used in a server."
+            (
+                "❌ This command can only "
+                "be used in a server."
+            )
         )
         return
 
     if not item_name:
         await ctx.send(
-            "❌ Usage: `!loot Item Name`\n"
-            "Example: `!loot Flame Tongue`"
+            (
+                "❌ Usage: `!loot Item Name`\n"
+                "Example: `!loot Flame Tongue`"
+            )
         )
         return
 
@@ -4230,7 +4258,10 @@ async def loot_cmd(
 
         if not matches:
             await ctx.send(
-                f"❌ No loot item found matching `{item_name}`."
+                (
+                    "❌ No loot item found matching "
+                    f"`{item_name}`."
+                )
             )
             return
 
@@ -4401,7 +4432,10 @@ async def reloadloot_cmd(
 ):
     if ctx.guild is None:
         await ctx.send(
-            "❌ This command can only be used in a server."
+            (
+                "❌ This command can only "
+                "be used in a server."
+            )
         )
         return
 
@@ -4416,7 +4450,10 @@ async def reloadloot_cmd(
         & PAYDAY_ALLOWED_ROLES
     ):
         await ctx.send(
-            "❌ Only The Hearth may reload the loot registry."
+            (
+                "❌ Only The Hearth may "
+                "reload the loot registry."
+            )
         )
         return
 
@@ -4485,7 +4522,10 @@ async def payday_cmd(
 ):
     if ctx.guild is None:
         await ctx.send(
-            "❌ This command can only be used in a server."
+            (
+                "❌ This command can only "
+                "be used in a server."
+            )
         )
         return
 
@@ -4500,7 +4540,10 @@ async def payday_cmd(
         & PAYDAY_ALLOWED_ROLES
     ):
         await ctx.send(
-            "❌ Only The Hearth may run staff payday."
+            (
+                "❌ Only The Hearth may "
+                "run staff payday."
+            )
         )
         return
 
@@ -4683,7 +4726,10 @@ def get_track_date_range(
 
     if end_date < start_date:
         raise ValueError(
-            "End date cannot be before start date."
+            (
+                "End date cannot be "
+                "before start date."
+            )
         )
 
     start_dt = datetime(
@@ -4832,7 +4878,10 @@ async def track_cmd(
 ):
     if ctx.guild is None:
         await ctx.send(
-            "❌ This command can only be used in a server."
+            (
+                "❌ This command can only "
+                "be used in a server."
+            )
         )
         return
 
@@ -4847,7 +4896,10 @@ async def track_cmd(
         & PAYDAY_ALLOWED_ROLES
     ):
         await ctx.send(
-            "❌ Only The Hearth may use the RP tracking command."
+            (
+                "❌ Only The Hearth may "
+                "use the RP tracking command."
+            )
         )
         return
 
@@ -4855,9 +4907,12 @@ async def track_cmd(
         await ctx.send(
             (
                 "❌ Usage:\n"
-                "`!track rphours @user 10/1/26-10/19/26`\n"
-                "`!track rpsessions @user 10/1/26-10/19/26`\n"
-                "`!track rptop 5 10/1/26-10/19/26`"
+                "`!track rphours @user "
+                "10/1/26-10/19/26`\n"
+                "`!track rpsessions @user "
+                "10/1/26-10/19/26`\n"
+                "`!track rptop 5 "
+                "10/1/26-10/19/26`"
             )
         )
         return
@@ -4889,8 +4944,11 @@ async def track_cmd(
         "rptop"
     ):
         await ctx.send(
-            "❌ Tracking type must be "
-            "`rphours`, `rpsessions`, or `rptop`."
+            (
+                "❌ Tracking type must be "
+                "`rphours`, `rpsessions`, "
+                "or `rptop`."
+            )
         )
         return
 
@@ -4903,8 +4961,10 @@ async def track_cmd(
     if not date_match:
         await ctx.send(
             (
-                "❌ I couldn't read the date range.\n"
-                "Use something like: `10/1/26-10/19/26`"
+                "❌ I couldn't read the "
+                "date range.\n"
+                "Use something like: "
+                "`10/1/26-10/19/26`"
             )
         )
         return
@@ -4953,19 +5013,29 @@ async def track_cmd(
 
         except Exception:
             await ctx.send(
-                "❌ Usage: `!track rptop 5 10/1/26-10/19/26`"
+                (
+                    "❌ Usage: "
+                    "`!track rptop 5 "
+                    "10/1/26-10/19/26`"
+                )
             )
             return
 
         if amount < 1:
             await ctx.send(
-                "❌ Leaderboard size must be at least 1."
+                (
+                    "❌ Leaderboard size "
+                    "must be at least 1."
+                )
             )
             return
 
         if amount > 25:
             await ctx.send(
-                "❌ `rptop` can show a maximum of 25 users at once."
+                (
+                    "❌ `rptop` can show "
+                    "a maximum of 25 users at once."
+                )
             )
             return
 
@@ -5038,7 +5108,11 @@ async def track_cmd(
 
         if not rows:
             await ctx.send(
-                f"📊 No rewarded RP activity was found for **{display_range}**."
+                (
+                    "📊 No rewarded RP activity "
+                    "was found for "
+                    f"**{display_range}**."
+                )
             )
             return
 
@@ -5075,7 +5149,8 @@ async def track_cmd(
                     f"**{position}.** "
                     f"<@{user_id}> — "
                     f"**{total_hours}h** — "
-                    f"**{rp_sessions} RP sessions**"
+                    f"**{rp_sessions} "
+                    "RP sessions**"
                 )
             )
 
@@ -5095,7 +5170,8 @@ async def track_cmd(
         embed = apply_theme(
             embed,
             footer_text_override=(
-                "Hours are calculated using rewarded RP hours."
+                "Hours are calculated using "
+                "rewarded RP hours."
             )
         )
 
@@ -5110,7 +5186,11 @@ async def track_cmd(
 
     if not target_text:
         await ctx.send(
-            f"❌ Usage: `!track {mode} @user 10/1/26-10/19/26`"
+            (
+                f"❌ Usage: "
+                f"`!track {mode} @user "
+                "10/1/26-10/19/26`"
+            )
         )
         return
 
@@ -5122,8 +5202,11 @@ async def track_cmd(
     if member is None:
         await ctx.send(
             (
-                "❌ I couldn't uniquely identify that user.\n"
-                "Use their Discord mention, user ID, username, or display name."
+                "❌ I couldn't uniquely "
+                "identify that user.\n"
+                "Use their Discord mention, "
+                "user ID, username, "
+                "or display name."
             )
         )
         return
@@ -5198,8 +5281,10 @@ async def track_cmd(
             description=(
                 f"{member.mention}\n"
                 f"**{display_range}**\n\n"
-                f"Rewarded RP Hours: **{total_hours}h**\n"
-                f"Qualifying RP Sessions: **{rp_sessions}**"
+                "Rewarded RP Hours: "
+                f"**{total_hours}h**\n"
+                "Qualifying RP Sessions: "
+                f"**{rp_sessions}**"
             ),
             color=theme_color()
         )
@@ -5210,8 +5295,10 @@ async def track_cmd(
             description=(
                 f"{member.mention}\n"
                 f"**{display_range}**\n\n"
-                f"Qualifying RP Sessions: **{rp_sessions}**\n"
-                f"Rewarded RP Hours: **{total_hours}h**"
+                "Qualifying RP Sessions: "
+                f"**{rp_sessions}**\n"
+                "Rewarded RP Hours: "
+                f"**{total_hours}h**"
             ),
             color=theme_color()
         )
@@ -5220,7 +5307,8 @@ async def track_cmd(
         embed,
         footer_text_override=(
             "A qualifying session is one "
-            "that earned at least 1 RP reward hour."
+            "that earned at least "
+            "1 RP reward hour."
         )
     )
 
@@ -5242,7 +5330,10 @@ async def qrecords_cmd(
 ):
     if ctx.guild is None:
         await ctx.send(
-            "❌ This command can only be used in a server."
+            (
+                "❌ This command can only "
+                "be used in a server."
+            )
         )
         return
 
@@ -5269,300 +5360,7 @@ async def qrecords_cmd(
 
     except Exception:
         await ctx.send(
-            "❌ Could not parse. Make sure your quotes are closed properly."
-        )
-        return
-
-    if len(parts) < 6:
-        await ctx.send(
             (
-                '❌ Usage: !qrecords '
-                '"Name" "Desc" "Difficulty" '
-                '"xp-min/xp-max" '
-                '"gp-min/gp-max" '
-                '"loot/none" '
-                '@p char level ...\n'
-                'Use level `21` for a Specialist character.'
-            )
-        )
-        return
-
-    (
-        qname,
-        qdesc,
-        diff,
-        xp_mode_raw,
-        gp_mode_raw,
-        loot_raw
-    ) = parts[:6]
-
-    rest = (
-        parts[6:]
-    )
-
-    xp_mode = (
-        "max"
-        if "max"
-        in xp_mode_raw.lower()
-        else "min"
-    )
-
-    gp_mode = (
-        "max"
-        if "max"
-        in gp_mode_raw.lower()
-        else "min"
-    )
-
-    do_loot = (
-        loot_raw
-        .strip()
-        .lower()
-        in (
-            "loot",
-            "yes",
-            "true",
-            "1"
-        )
-    )
-
-    if (
-        len(rest)
-        % 3
-        != 0
-    ):
-        await ctx.send(
-            "❌ Player list must be groups of 3: @player CharacterName Level"
-        )
-        return
-
-    lines: List[str] = []
-
-    pending_specialist_coins: Dict[
-        int,
-        int
-    ] = {}
-
-    pending_player_keys: Dict[
-        int,
-        int
-    ] = {}
-
-    for i in range(
-        0,
-        len(rest),
-        3
-    ):
-        (
-            user_tok,
-            char,
-            lvl_tok
-        ) = rest[
-            i:i + 3
-        ]
-
-        uid = parse_user_id(
-            user_tok
-        )
-
-        if uid is None:
-            await ctx.send(
-                f"❌ Couldn't read player mention/id: `{user_tok}`"
-            )
-            return
-
-        member = ctx.guild.get_member(
-            uid
-        )
-
-        if member is None:
-            try:
-                member = (
-                    await ctx.guild.fetch_member(
-                        uid
-                    )
-                )
-
-            except Exception:
-                member = None
-
-        if member is None:
-            await ctx.send(
-                f"❌ Couldn't find that member in this server: `{user_tok}`"
-            )
-            return
-
-        try:
-            lvl = int(
-                lvl_tok
-            )
-
-            if not 1 <= lvl <= 21:
-                raise ValueError
-
-        except Exception:
-            await ctx.send(
-                (
-                    "❌ Bad level for "
-                    f"{member.mention}: "
-                    f"`{lvl_tok}`. "
-                    "Use levels `1-20`, "
-                    "or `21` for Specialist."
-                )
-            )
-            return
-
-        specialist_coins = None
-
-        if lvl == 21:
-            specialist_coins = (
-                SPECIALIST_QUEST_COINS_MAX
-                if xp_mode == "max"
-                else SPECIALIST_QUEST_COINS_MIN
-            )
-
-            gp = (
-                SPECIALIST_QUEST_GP_MAX
-                if gp_mode == "max"
-                else SPECIALIST_QUEST_GP_MIN
-            )
-
-            if DOUBLE_QUEST_EVENT_ACTIVE:
-                gp *= 2
-
-            xp = None
-            xp_keys = None
-
-            pending_specialist_coins[
-                uid
-            ] = (
-                pending_specialist_coins.get(
-                    uid,
-                    0
-                )
-                + specialist_coins
-            )
-
-        elif lvl == 20:
-            (
-                gp_min,
-                gp_max
-            ) = QUEST_GP.get(
-                20,
-                (
-                    1000,
-                    2000
-                )
-            )
-
-            gp = (
-                gp_max
-                if gp_mode == "max"
-                else gp_min
-            )
-
-            if DOUBLE_QUEST_EVENT_ACTIVE:
-                gp *= 2
-
-            xp = None
-            xp_keys = 4
-
-            pending_player_keys[
-                uid
-            ] = (
-                pending_player_keys.get(
-                    uid,
-                    0
-                )
-                + xp_keys
-            )
-
-        else:
-            (
-                xp_min,
-                xp_max
-            ) = QUEST_XP.get(
-                lvl,
-                (
-                    0,
-                    0
-                )
-            )
-
-            (
-                gp_min,
-                gp_max
-            ) = QUEST_GP.get(
-                lvl,
-                (
-                    0,
-                    0
-                )
-            )
-
-            xp = (
-                xp_max
-                if xp_mode == "max"
-                else xp_min
-            )
-
-            gp = (
-                gp_max
-                if gp_mode == "max"
-                else gp_min
-            )
-
-            if DOUBLE_QUEST_EVENT_ACTIVE:
-                xp *= 2
-                gp *= 2
-
-            xp_keys = None
-
-        loot_txt = "none"
-        gm_roll = None
-
-        if do_loot:
-            gm_roll = random.randint(
-                1,
-                100
-            )
-
-            base = rarity_for_level(
-                lvl
-            )
-
-            final_rarity = rarity_shift(
-                base,
-                gm_roll,
-                lvl
-            )
-
-            item = random_loot(
-                final_rarity
-            )
-
-            if item:
-                (
-                    loot_name,
-                    _
-                ) = item
-
-                loot_txt = (
-                    loot_name
-                )
-
-            else:
-                loot_txt = (
-                    "(No items loaded for "
-                    f"{final_rarity})"
-                )
-
-        if lvl == 21:
-            reward_str = (
-                f"{specialist_coins} 🪙, "
-                f"{gp} gp"
-            )
-
-        elif lvl == 20:
-            reward_str = (
-                f"{xp_keys} 🗝️, "
+                "❌ Could not parse. "
+                "Make sure your quotes "
+                "are closed properly
