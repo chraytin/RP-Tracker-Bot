@@ -1542,7 +1542,292 @@ def critmas_add_pumpkins_capped(
 
     return actual_award
 
+def critmas_get(
+    guild_id: int,
+    user_id: int
+) -> Tuple[int, int, int, int]:
+    """
+    Returns:
+    pumpkins_current,
+    pumpkins_lifetime,
+    trees_current,
+    trees_lifetime
+    """
 
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    pumpkins_current,
+                    pumpkins_lifetime,
+                    trees_current,
+                    trees_lifetime
+                FROM critmas_currency
+                WHERE
+                    guild_id=%s
+                    AND user_id=%s
+            """, (
+                guild_id,
+                user_id
+            ))
+
+            row = cur.fetchone()
+
+    if not row:
+        return (
+            0,
+            0,
+            0,
+            0
+        )
+
+    return (
+        int(row[0] or 0),
+        int(row[1] or 0),
+        int(row[2] or 0),
+        int(row[3] or 0)
+    )
+
+
+def critmas_add_currency(
+    guild_id: int,
+    user_id: int,
+    currency: str,
+    amount: int
+):
+    """
+    Administrative additions.
+    Adds to both current and lifetime.
+    """
+
+    amount = int(
+        amount
+    )
+
+    if amount <= 0:
+        return
+
+    if currency == "pumpkin":
+        current_column = (
+            "pumpkins_current"
+        )
+
+        lifetime_column = (
+            "pumpkins_lifetime"
+        )
+
+    elif currency == "tree":
+        current_column = (
+            "trees_current"
+        )
+
+        lifetime_column = (
+            "trees_lifetime"
+        )
+
+    else:
+        raise ValueError(
+            "Invalid Critmas currency."
+        )
+
+    with db() as conn:
+        with conn.cursor() as cur:
+
+            cur.execute("""
+                INSERT INTO critmas_currency (
+                    guild_id,
+                    user_id,
+                    pumpkins_current,
+                    pumpkins_lifetime,
+                    trees_current,
+                    trees_lifetime
+                )
+                VALUES (
+                    %s,
+                    %s,
+                    0,
+                    0,
+                    0,
+                    0
+                )
+                ON CONFLICT (
+                    guild_id,
+                    user_id
+                )
+                DO NOTHING
+            """, (
+                guild_id,
+                user_id
+            ))
+
+            cur.execute(
+                f"""
+                UPDATE critmas_currency
+                SET
+                    {current_column} =
+                        {current_column} + %s,
+                    {lifetime_column} =
+                        {lifetime_column} + %s
+                WHERE
+                    guild_id=%s
+                    AND user_id=%s
+                """,
+                (
+                    amount,
+                    amount,
+                    guild_id,
+                    user_id
+                )
+            )
+
+
+def critmas_spend_currency(
+    guild_id: int,
+    user_id: int,
+    currency: str,
+    amount: int
+) -> bool:
+    """
+    Deducts from current balance only.
+
+    Returns True if successful.
+    Returns False if the player
+    doesn't have enough currency.
+    """
+
+    amount = int(
+        amount
+    )
+
+    if amount <= 0:
+        return False
+
+    if currency == "pumpkin":
+        column = (
+            "pumpkins_current"
+        )
+
+    elif currency == "tree":
+        column = (
+            "trees_current"
+        )
+
+    else:
+        raise ValueError(
+            "Invalid Critmas currency."
+        )
+
+    with db() as conn:
+        with conn.cursor() as cur:
+
+            cur.execute(
+                f"""
+                UPDATE critmas_currency
+                SET
+                    {column} =
+                        {column} - %s
+                WHERE
+                    guild_id=%s
+                    AND user_id=%s
+                    AND {column} >= %s
+                RETURNING {column}
+                """,
+                (
+                    amount,
+                    guild_id,
+                    user_id,
+                    amount
+                )
+            )
+
+            row = cur.fetchone()
+
+    return (
+        row is not None
+    )
+
+
+def build_critmas_embed(
+    member: discord.Member
+) -> discord.Embed:
+
+    (
+        pumpkins_current,
+        pumpkins_lifetime,
+        trees_current,
+        trees_lifetime
+    ) = critmas_get(
+        member.guild.id,
+        member.id
+    )
+
+    combined_current = (
+        pumpkins_current
+        + trees_current
+    )
+
+    embed = discord.Embed(
+        title=(
+            "🎃 Nightmare Before Critmas 🎄"
+        ),
+        description=(
+            f"### {member.display_name}'s "
+            f"Event Ledger"
+        ),
+        color=theme_color()
+    )
+
+    embed.add_field(
+        name="🎃 Pumpkins",
+        value=(
+            f"**{pumpkins_current} 🎃**"
+        ),
+        inline=True
+    )
+
+    embed.add_field(
+        name="🎄 Trees",
+        value=(
+            f"**{trees_current} 🎄**"
+        ),
+        inline=True
+    )
+
+    embed.add_field(
+        name="🎁 Combined Current",
+        value=(
+            f"**{combined_current} / 100**"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="📜 Lifetime Earned",
+        value=(
+            f"🎃 **{pumpkins_lifetime}**\n"
+            f"🎄 **{trees_lifetime}**"
+        ),
+        inline=False
+    )
+
+    if combined_current >= 100:
+        embed.add_field(
+            name="🎁 Grand Reward",
+            value=(
+                "**Grand Reward threshold reached!**\n"
+                "You currently have enough combined "
+                "event currency to redeem a reward."
+            ),
+            inline=False
+        )
+
+    return apply_theme(
+        embed,
+        footer_text_override=(
+            "Nightmare Before Critmas • "
+            "November 1–30"
+        )
+    )
 # =========================
 # SESSION HELPERS
 # =========================
@@ -4609,7 +4894,481 @@ async def newloot_cmd(
         )
     )
 
+@bot.command(
+    name="critmas"
+)
+async def critmas_cmd(
+    ctx: commands.Context,
+    *,
+    args: Optional[str] = None
+):
+    if ctx.guild is None:
+        await ctx.send(
+            "❌ This command can only be used in a server."
+        )
+        return
 
+    # =========================
+    # !critmas
+    # View your own wallet
+    # =========================
+    if not args:
+        await ctx.send(
+            embed=build_critmas_embed(
+                ctx.author
+            )
+        )
+        return
+
+    try:
+        parts = shlex.split(
+            args
+        )
+
+    except Exception:
+        await ctx.send(
+            (
+                "❌ I couldn't read that command. "
+                "Make sure quotation marks are closed."
+            )
+        )
+        return
+
+    if not parts:
+        await ctx.send(
+            embed=build_critmas_embed(
+                ctx.author
+            )
+        )
+        return
+
+    target_member = (
+        ctx.author
+    )
+
+    # =========================
+    # HEARTH TARGETING
+    #
+    # !critmas @user pumpkin +5 "Reason"
+    # !critmas @user tree -5 "Reason"
+    # =========================
+    possible_user_id = parse_user_id(
+        parts[0]
+    )
+
+    if possible_user_id is not None:
+        author_roles = {
+            role.name
+            for role
+            in ctx.author.roles
+        }
+
+        if not (
+            author_roles
+            & PAYDAY_ALLOWED_ROLES
+        ):
+            await ctx.send(
+                (
+                    "❌ Only **The Hearth** may "
+                    "modify another player's "
+                    "event currency."
+                )
+            )
+            return
+
+        target_member = (
+            ctx.guild.get_member(
+                possible_user_id
+            )
+        )
+
+        if target_member is None:
+            try:
+                target_member = (
+                    await ctx.guild.fetch_member(
+                        possible_user_id
+                    )
+                )
+
+            except Exception:
+                target_member = None
+
+        if target_member is None:
+            await ctx.send(
+                "❌ I couldn't find that member."
+            )
+            return
+
+        parts = parts[
+            1:
+        ]
+
+        # Hearth can also just view:
+        # !critmas @user
+        if not parts:
+            await ctx.send(
+                embed=build_critmas_embed(
+                    target_member
+                )
+            )
+            return
+
+    # =========================
+    # CURRENCY
+    # =========================
+    if len(parts) < 2:
+        await ctx.send(
+            (
+                "❌ Usage:\n"
+                "`!critmas`\n"
+                '`!critmas pumpkin -5 "RP Dip"`\n'
+                '`!critmas tree -10 "Targeted Quest"`'
+            )
+        )
+        return
+
+    currency_raw = (
+        parts[0]
+        .strip()
+        .lower()
+    )
+
+    currency_aliases = {
+        "pumpkin": "pumpkin",
+        "pumpkins": "pumpkin",
+        "🎃": "pumpkin",
+
+        "tree": "tree",
+        "trees": "tree",
+        "christmas": "tree",
+        "critmas": "tree",
+        "🎄": "tree",
+    }
+
+    currency = (
+        currency_aliases.get(
+            currency_raw
+        )
+    )
+
+    if currency is None:
+        await ctx.send(
+            (
+                "❌ Currency must be "
+                "`pumpkin` or `tree`."
+            )
+        )
+        return
+
+    # =========================
+    # AMOUNT
+    # =========================
+    try:
+        delta = int(
+            parts[1]
+        )
+
+    except Exception:
+        await ctx.send(
+            (
+                "❌ Amount must be a number "
+                "such as `-5` or `+5`."
+            )
+        )
+        return
+
+    if delta == 0:
+        await ctx.send(
+            "❌ Amount cannot be 0."
+        )
+        return
+
+    reason = (
+        " ".join(
+            parts[
+                2:
+            ]
+        ).strip()
+    )
+
+    if not reason:
+        await ctx.send(
+            (
+                "❌ Please include a reason.\n"
+                "Example: "
+                '`!critmas pumpkin -5 "RP Dip"`'
+            )
+        )
+        return
+
+    author_roles = {
+        role.name
+        for role
+        in ctx.author.roles
+    }
+
+    is_hearth = bool(
+        author_roles
+        & PAYDAY_ALLOWED_ROLES
+    )
+
+    # =========================
+    # ADDING CURRENCY
+    # Hearth only
+    # =========================
+    if delta > 0:
+
+        if not is_hearth:
+            await ctx.send(
+                (
+                    "❌ Only **The Hearth** may "
+                    "manually add event currency."
+                )
+            )
+            return
+
+        critmas_add_currency(
+            ctx.guild.id,
+            target_member.id,
+            currency,
+            delta
+        )
+
+        emoji = (
+            "🎃"
+            if currency == "pumpkin"
+            else "🎄"
+        )
+
+        currency_name = (
+            "Pumpkins"
+            if currency == "pumpkin"
+            else "Trees"
+        )
+
+        (
+            pumpkins_current,
+            pumpkins_lifetime,
+            trees_current,
+            trees_lifetime
+        ) = critmas_get(
+            ctx.guild.id,
+            target_member.id
+        )
+
+        remaining = (
+            pumpkins_current
+            if currency == "pumpkin"
+            else trees_current
+        )
+
+        embed = discord.Embed(
+            title=(
+                "🎃 Nightmare Before Critmas 🎄"
+            ),
+            description=(
+                "### Event Currency Adjustment"
+            ),
+            color=theme_color()
+        )
+
+        embed.add_field(
+            name="Adventurer",
+            value=target_member.mention,
+            inline=False
+        )
+
+        embed.add_field(
+            name=currency_name,
+            value=(
+                f"**+{delta} {emoji}**"
+            ),
+            inline=True
+        )
+
+        embed.add_field(
+            name="New Balance",
+            value=(
+                f"**{remaining} {emoji}**"
+            ),
+            inline=True
+        )
+
+        embed.add_field(
+            name="For",
+            value=reason,
+            inline=False
+        )
+
+        embed.add_field(
+            name="Adjusted By",
+            value=ctx.author.mention,
+            inline=False
+        )
+
+        await ctx.send(
+            embed=apply_theme(
+                embed,
+                footer_text_override=(
+                    "Nightmare Before Critmas • "
+                    "Event Ledger"
+                )
+            )
+        )
+
+        return
+
+    # =========================
+    # SPENDING
+    # =========================
+    spend_amount = abs(
+        delta
+    )
+
+    (
+        pumpkins_current,
+        pumpkins_lifetime,
+        trees_current,
+        trees_lifetime
+    ) = critmas_get(
+        ctx.guild.id,
+        target_member.id
+    )
+
+    current_balance = (
+        pumpkins_current
+        if currency == "pumpkin"
+        else trees_current
+    )
+
+    emoji = (
+        "🎃"
+        if currency == "pumpkin"
+        else "🎄"
+    )
+
+    currency_name = (
+        "Pumpkins"
+        if currency == "pumpkin"
+        else "Trees"
+    )
+
+    if current_balance < spend_amount:
+        await ctx.send(
+            (
+                f"❌ {target_member.mention} "
+                f"doesn't have enough {emoji}.\n"
+                f"Current Balance: "
+                f"**{current_balance} {emoji}**\n"
+                f"Attempted Spend: "
+                f"**{spend_amount} {emoji}**"
+            )
+        )
+        return
+
+    success = critmas_spend_currency(
+        ctx.guild.id,
+        target_member.id,
+        currency,
+        spend_amount
+    )
+
+    if not success:
+        await ctx.send(
+            (
+                "❌ That transaction could not "
+                "be completed. The balance may "
+                "have changed while processing."
+            )
+        )
+        return
+
+    (
+        pumpkins_current,
+        pumpkins_lifetime,
+        trees_current,
+        trees_lifetime
+    ) = critmas_get(
+        ctx.guild.id,
+        target_member.id
+    )
+
+    remaining = (
+        pumpkins_current
+        if currency == "pumpkin"
+        else trees_current
+    )
+
+    combined_remaining = (
+        pumpkins_current
+        + trees_current
+    )
+
+    embed = discord.Embed(
+        title=(
+            "🎃 Nightmare Before Critmas 🎄"
+        ),
+        description=(
+            "### Event Purchase Filed"
+        ),
+        color=theme_color()
+    )
+
+    embed.add_field(
+        name="Adventurer",
+        value=target_member.mention,
+        inline=False
+    )
+
+    embed.add_field(
+        name=currency_name,
+        value=(
+            f"**-{spend_amount} {emoji}**"
+        ),
+        inline=True
+    )
+
+    embed.add_field(
+        name="Remaining",
+        value=(
+            f"**{remaining} {emoji}**"
+        ),
+        inline=True
+    )
+
+    embed.add_field(
+        name="For",
+        value=reason,
+        inline=False
+    )
+
+    embed.add_field(
+        name="Combined Event Balance",
+        value=(
+            f"**{combined_remaining} / 100**"
+        ),
+        inline=False
+    )
+
+    if (
+        target_member.id
+        != ctx.author.id
+    ):
+        embed.add_field(
+            name="Filed By",
+            value=ctx.author.mention,
+            inline=False
+        )
+
+    await ctx.send(
+        embed=apply_theme(
+            embed,
+            footer_text_override=(
+                "Nightmare Before Critmas • "
+                "Event Ledger"
+            )
+        )
+    )
 # =========================
 # STAFF
 # =========================
