@@ -1396,115 +1396,121 @@ def critmas_add_trees(
             ))
 
 
-def critmas_add_pumpkins_capped(
+def critmas_add_rp_pumpkins(
     guild_id: int,
     user_id: int,
-    rewarded_hours: int
-) -> int:
+    rp_started_at: float,
+    rp_seconds: int
+) -> Tuple[int, int]:
+    """
+    Awards Nightmare Before Critmas pumpkins based on when each
+    rewarded RP hour was actually earned.
+
+    RP reward thresholds follow the bot's normal rule:
+        45 minutes = 1 rewarded hour
+        1h45m = 2
+        2h45m = 3
+        etc.
+
+    Each rewarded hour is assigned to the Central-time calendar
+    date on which its threshold was crossed.
+
+    Maximum: 5 pumpkins per player per Central calendar day.
+
+    Returns:
+        (pumpkins_awarded, pumpkins_blocked_by_daily_cap)
+    """
 
     if not nightmare_event_active():
-        return 0
+        return 0, 0
 
-    requested = (
-        max(
-            0,
-            int(
-                rewarded_hours
-            )
-        )
-        * NIGHTMARE_RP_PUMPKINS_PER_HOUR
+    rp_seconds = max(
+        0,
+        int(rp_seconds)
     )
 
-    if requested <= 0:
-        return 0
+    total_reward_hours = reward_hours(
+        rp_seconds
+    )
 
-    event_date = datetime.now(
-        NIGHTMARE_EVENT_TIMEZONE
-    ).date()
+    if total_reward_hours <= 0:
+        return 0, 0
+
+    # -------------------------------------------------
+    # Determine the Central-time date on which each
+    # rewarded RP hour was actually earned.
+    #
+    # Reward #1 = 45 minutes after joining
+    # Reward #2 = 1h45m after joining
+    # Reward #3 = 2h45m after joining
+    # etc.
+    # -------------------------------------------------
+
+    pumpkins_by_date: Dict[
+        object,
+        int
+    ] = {}
+
+    for reward_number in range(
+        total_reward_hours
+    ):
+        threshold_seconds = (
+            2700
+            + (
+                reward_number
+                * 3600
+            )
+        )
+
+        threshold_timestamp = (
+            float(rp_started_at)
+            + threshold_seconds
+        )
+
+        threshold_datetime = (
+            datetime.fromtimestamp(
+                threshold_timestamp,
+                tz=NIGHTMARE_EVENT_TIMEZONE
+            )
+        )
+
+        # Only award thresholds that actually occurred
+        # during Nightmare Before Critmas.
+        if not (
+            NIGHTMARE_EVENT_START
+            <= threshold_datetime
+            < NIGHTMARE_EVENT_END
+        ):
+            continue
+
+        event_date = (
+            threshold_datetime.date()
+        )
+
+        pumpkins_by_date[
+            event_date
+        ] = (
+            pumpkins_by_date.get(
+                event_date,
+                0
+            )
+            + NIGHTMARE_RP_PUMPKINS_PER_HOUR
+        )
+
+    if not pumpkins_by_date:
+        return 0, 0
+
+    total_awarded = 0
+    total_blocked = 0
+
+    # -------------------------------------------------
+    # Apply each day's independent 5-pumpkin cap.
+    # -------------------------------------------------
 
     with db() as conn:
         with conn.cursor() as cur:
 
-            cur.execute("""
-                INSERT INTO critmas_rp_daily (
-                    guild_id,
-                    user_id,
-                    event_date,
-                    pumpkins_awarded
-                )
-                VALUES (
-                    %s,
-                    %s,
-                    %s,
-                    0
-                )
-                ON CONFLICT (
-                    guild_id,
-                    user_id,
-                    event_date
-                )
-                DO NOTHING
-            """, (
-                guild_id,
-                user_id,
-                event_date
-            ))
-
-            cur.execute("""
-                SELECT
-                    pumpkins_awarded
-                FROM critmas_rp_daily
-                WHERE
-                    guild_id=%s
-                    AND user_id=%s
-                    AND event_date=%s
-                FOR UPDATE
-            """, (
-                guild_id,
-                user_id,
-                event_date
-            ))
-
-            row = cur.fetchone()
-
-            already_awarded = (
-                int(
-                    row[0]
-                    or 0
-                )
-                if row
-                else 0
-            )
-
-            remaining = max(
-                0,
-                NIGHTMARE_RP_PUMPKIN_DAILY_CAP
-                - already_awarded
-            )
-
-            actual_award = min(
-                requested,
-                remaining
-            )
-
-            if actual_award <= 0:
-                return 0
-
-            cur.execute("""
-                UPDATE critmas_rp_daily
-                SET pumpkins_awarded =
-                    pumpkins_awarded + %s
-                WHERE
-                    guild_id=%s
-                    AND user_id=%s
-                    AND event_date=%s
-            """, (
-                actual_award,
-                guild_id,
-                user_id,
-                event_date
-            ))
-
+            # Make sure the player's event wallet exists.
             cur.execute("""
                 INSERT INTO critmas_currency (
                     guild_id,
@@ -1517,8 +1523,8 @@ def critmas_add_pumpkins_capped(
                 VALUES (
                     %s,
                     %s,
-                    %s,
-                    %s,
+                    0,
+                    0,
                     0,
                     0
                 )
@@ -1526,21 +1532,133 @@ def critmas_add_pumpkins_capped(
                     guild_id,
                     user_id
                 )
-                DO UPDATE SET
-                    pumpkins_current =
-                        critmas_currency.pumpkins_current
-                        + EXCLUDED.pumpkins_current,
-                    pumpkins_lifetime =
-                        critmas_currency.pumpkins_lifetime
-                        + EXCLUDED.pumpkins_lifetime
+                DO NOTHING
             """, (
                 guild_id,
-                user_id,
-                actual_award,
-                actual_award
+                user_id
             ))
 
-    return actual_award
+            for (
+                event_date,
+                requested
+            ) in sorted(
+                pumpkins_by_date.items()
+            ):
+
+                # Ensure this player's daily record exists.
+                cur.execute("""
+                    INSERT INTO critmas_rp_daily (
+                        guild_id,
+                        user_id,
+                        event_date,
+                        pumpkins_awarded
+                    )
+                    VALUES (
+                        %s,
+                        %s,
+                        %s,
+                        0
+                    )
+                    ON CONFLICT (
+                        guild_id,
+                        user_id,
+                        event_date
+                    )
+                    DO NOTHING
+                """, (
+                    guild_id,
+                    user_id,
+                    event_date
+                ))
+
+                # Lock this day's record while calculating
+                # the remaining daily allowance.
+                cur.execute("""
+                    SELECT
+                        pumpkins_awarded
+                    FROM critmas_rp_daily
+                    WHERE
+                        guild_id=%s
+                        AND user_id=%s
+                        AND event_date=%s
+                    FOR UPDATE
+                """, (
+                    guild_id,
+                    user_id,
+                    event_date
+                ))
+
+                row = cur.fetchone()
+
+                already_awarded = (
+                    int(row[0] or 0)
+                    if row
+                    else 0
+                )
+
+                remaining_today = max(
+                    0,
+                    NIGHTMARE_RP_PUMPKIN_DAILY_CAP
+                    - already_awarded
+                )
+
+                actual_award = min(
+                    requested,
+                    remaining_today
+                )
+
+                blocked = max(
+                    0,
+                    requested
+                    - actual_award
+                )
+
+                if actual_award > 0:
+                    cur.execute("""
+                        UPDATE critmas_rp_daily
+                        SET
+                            pumpkins_awarded =
+                                pumpkins_awarded + %s
+                        WHERE
+                            guild_id=%s
+                            AND user_id=%s
+                            AND event_date=%s
+                    """, (
+                        actual_award,
+                        guild_id,
+                        user_id,
+                        event_date
+                    ))
+
+                    cur.execute("""
+                        UPDATE critmas_currency
+                        SET
+                            pumpkins_current =
+                                pumpkins_current + %s,
+                            pumpkins_lifetime =
+                                pumpkins_lifetime + %s
+                        WHERE
+                            guild_id=%s
+                            AND user_id=%s
+                    """, (
+                        actual_award,
+                        actual_award,
+                        guild_id,
+                        user_id
+                    ))
+
+                total_awarded += (
+                    actual_award
+                )
+
+                total_blocked += (
+                    blocked
+                )
+
+    return (
+        total_awarded,
+        total_blocked
+    )
 
 def critmas_get(
     guild_id: int,
@@ -3951,18 +4069,18 @@ async def end_session_and_post_rewards(
             event_active
             and hrs > 0
         ):
-            requested_pumpkins = (
-                hrs
-                * NIGHTMARE_RP_PUMPKINS_PER_HOUR
-            )
+            awarded_pumpkins = 0
+            blocked_pumpkins = 0
 
-            awarded_pumpkins = (
-                critmas_add_pumpkins_capped(
-                    guild_id,
-                    uid,
-                    hrs
+            if event_active and hrs > 0:
+                awarded_pumpkins, blocked_pumpkins = (
+                    critmas_add_rp_pumpkins(
+                        guild_id,
+                        uid,
+                        rp_started_at,
+                        secs
+                    )
                 )
-            )
 
             pumpkin_suffix = (
                 f", **{awarded_pumpkins}** 🎃"
