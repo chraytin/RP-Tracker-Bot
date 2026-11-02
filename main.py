@@ -22,9 +22,7 @@ print("Booting RP Tracker...", flush=True)
 # =========================
 TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
-    raise RuntimeError(
-        "DISCORD_TOKEN is not set. Add it in Railway → Variables."
-    )
+    raise RuntimeError("DISCORD_TOKEN is not set. Add it in Railway → Variables.")
 
 DOUBLE_RP_EVENT_ACTIVE = False
 DOUBLE_QUEST_EVENT_ACTIVE = False
@@ -33,48 +31,23 @@ DOUBLE_QUEST_EVENT_ACTIVE = False
 # NIGHTMARE BEFORE CRITMAS
 # November 1-30, 2026
 # =========================
-NIGHTMARE_EVENT_TIMEZONE = ZoneInfo(
-    "America/Chicago"
-)
-
-NIGHTMARE_EVENT_START = datetime(
-    2026,
-    11,
-    1,
-    0,
-    0,
-    tzinfo=NIGHTMARE_EVENT_TIMEZONE,
-)
-
-NIGHTMARE_EVENT_END = datetime(
-    2026,
-    12,
-    1,
-    0,
-    0,
-    tzinfo=NIGHTMARE_EVENT_TIMEZONE,
-)
-
+NIGHTMARE_EVENT_TIMEZONE = ZoneInfo("America/Chicago")
+NIGHTMARE_EVENT_START = datetime(2026, 11, 1, 0, 0, tzinfo=NIGHTMARE_EVENT_TIMEZONE)
+NIGHTMARE_EVENT_END = datetime(2026, 12, 1, 0, 0, tzinfo=NIGHTMARE_EVENT_TIMEZONE)
 NIGHTMARE_QUEST_TREES = 5
 NIGHTMARE_RP_PUMPKINS_PER_HOUR = 1
 NIGHTMARE_RP_PUMPKIN_DAILY_CAP = 5
 
+def nightmare_event_active_at(timestamp: Optional[float] = None) -> bool:
+    dt = (datetime.now(NIGHTMARE_EVENT_TIMEZONE) if timestamp is None
+          else datetime.fromtimestamp(timestamp, tz=NIGHTMARE_EVENT_TIMEZONE))
+    return NIGHTMARE_EVENT_START <= dt < NIGHTMARE_EVENT_END
 
 def nightmare_event_active() -> bool:
-    now = datetime.now(
-        NIGHTMARE_EVENT_TIMEZONE
-    )
-
-    return (
-        NIGHTMARE_EVENT_START
-        <= now
-        < NIGHTMARE_EVENT_END
-    )
-
+    return nightmare_event_active_at()
 
 SPECIALIST_RP_COINS_PER_HOUR = 2
 SPECIALIST_RP_GP_PER_HOUR = 200
-
 SPECIALIST_QUEST_COINS_MIN = 4
 SPECIALIST_QUEST_COINS_MAX = 8
 SPECIALIST_QUEST_GP_MIN = 1000
@@ -82,378 +55,140 @@ SPECIALIST_QUEST_GP_MAX = 2000
 
 
 def db():
-    database_url = os.getenv(
-        "DATABASE_URL"
-    )
-
+    database_url = os.getenv("DATABASE_URL")
     if not database_url:
         raise RuntimeError(
             "DATABASE_URL is not set. In Railway, add a Variable Reference "
             "from the Postgres service into the RP-Tracker-Bot service."
         )
-
-    return psycopg.connect(
-        database_url
-    )
+    return psycopg.connect(database_url)
 
 
 # =========================
 # LOOT LOADING
 # =========================
-RARITY_ORDER = [
-    "Common",
-    "Uncommon",
-    "Rare",
-    "Very Rare",
-    "Legendary",
-    "Artifact",
-]
+RARITY_ORDER = ["Common", "Uncommon", "Rare", "Very Rare", "Legendary", "Artifact"]
 
 
-def _repo_path(
-    filename: str
-) -> str:
-    return os.path.join(
-        os.getenv(
-            "RAILWAY_WORKDIR",
-            "/app"
-        ),
-        filename
-    )
+def _repo_path(filename: str) -> str:
+    return os.path.join(os.getenv("RAILWAY_WORKDIR", "/app"), filename)
 
 
-def load_loot_csv(
-    path: str
-) -> List[Tuple[str, str]]:
-
-    items: List[
-        Tuple[str, str]
-    ] = []
-
-    if not os.path.exists(
-        path
-    ):
+def load_loot_csv(path: str) -> List[Tuple[str, str]]:
+    items: List[Tuple[str, str]] = []
+    if not os.path.exists(path):
         return items
 
-    with open(
-        path,
-        "r",
-        encoding="utf-8",
-        errors="ignore",
-        newline=""
-    ) as f:
-
-        reader = csv.reader(
-            f
-        )
-
+    with open(path, "r", encoding="utf-8", errors="ignore", newline="") as f:
+        reader = csv.reader(f)
         for row in reader:
             if not row:
                 continue
-
-            name = (
-                row[0]
-                or ""
-            ).strip()
-
+            name = (row[0] or "").strip()
             if not name:
                 continue
-
             low = name.lower()
-
-            if (
-                low in (
-                    "item",
-                    "items",
-                    "name"
-                )
-                or low.startswith(
-                    "name"
-                )
-                or "minimum trade value"
-                in low
-            ):
+            if low in ("item", "items", "name") or low.startswith("name") or "minimum trade value" in low:
                 continue
-
-            shop_price = (
-                (
-                    row[1]
-                    or ""
-                ).strip()
-                if len(row) > 1
-                else ""
-            )
-
-            items.append(
-                (
-                    name,
-                    shop_price
-                    or "—"
-                )
-            )
+            shop_price = (row[1] or "").strip() if len(row) > 1 else ""
+            items.append((name, shop_price or "—"))
 
     seen = set()
-
-    out: List[
-        Tuple[str, str]
-    ] = []
-
-    for (
-        name,
-        price
-    ) in items:
-
+    out: List[Tuple[str, str]] = []
+    for name, price in items:
         key = name.lower()
-
         if key not in seen:
-            seen.add(
-                key
-            )
-
-            out.append(
-                (
-                    name,
-                    price
-                )
-            )
-
+            seen.add(key)
+            out.append((name, price))
     return out
 
 
-def _normalize_header(
-    value: str
-) -> str:
-    return "".join(
-        ch
-        for ch in str(
-            value
-        ).strip().lower()
-        if ch.isalnum()
-    )
+def _normalize_header(value: str) -> str:
+    return "".join(ch for ch in str(value).strip().lower() if ch.isalnum())
 
 
-def _csv_value(
-    row: dict,
-    *possible_headers: str
-) -> str:
-
+def _csv_value(row: dict, *possible_headers: str) -> str:
     normalized_row = {}
-
-    for (
-        key,
-        value
-    ) in row.items():
-
+    for key, value in row.items():
         if key is not None:
-            normalized_row[
-                _normalize_header(
-                    key
-                )
-            ] = (
-                str(
-                    value
-                ).strip()
-                if value is not None
-                else ""
-            )
+            normalized_row[_normalize_header(key)] = str(value).strip() if value is not None else ""
 
     for header in possible_headers:
-        value = normalized_row.get(
-            _normalize_header(
-                header
-            )
-        )
-
+        value = normalized_row.get(_normalize_header(header))
         if value:
             return value
-
     return ""
 
 
-def load_loot_details_csv(
-    path: str,
-    rarity: str
-) -> List[Dict[str, str]]:
-
-    items: List[
-        Dict[str, str]
-    ] = []
-
-    if not os.path.exists(
-        path
-    ):
+def load_loot_details_csv(path: str, rarity: str) -> List[Dict[str, str]]:
+    items: List[Dict[str, str]] = []
+    if not os.path.exists(path):
         return items
 
-    with open(
-        path,
-        "r",
-        encoding="utf-8-sig",
-        errors="ignore",
-        newline=""
-    ) as f:
-
-        reader = csv.DictReader(
-            f
-        )
-
+    with open(path, "r", encoding="utf-8-sig", errors="ignore", newline="") as f:
+        reader = csv.DictReader(f)
         for row in reader:
-            name = _csv_value(
-                row,
-                "Name",
-                "Item",
-                "Items",
-                "Item Name"
-            )
-
+            name = _csv_value(row, "Name", "Item", "Items", "Item Name")
             if not name:
                 continue
-
-            shop_value = _csv_value(
-                row,
-                "Shop Price",
-                "Shop Value",
-                "Shop",
-                "Price"
-            )
-
+            shop_value = _csv_value(row, "Shop Price", "Shop Value", "Shop", "Price")
             min_trade = _csv_value(
                 row,
                 "Minimum Trade Value",
                 "Min Trade Value",
                 "Minimum Trade",
                 "Min Trade",
-                "Trade Value"
+                "Trade Value",
             )
-
-            items.append({
-                "name": name,
-                "rarity": rarity,
-                "shop_value": (
-                    shop_value
-                    or "—"
-                ),
-                "min_trade": (
-                    min_trade
-                    or "—"
-                ),
-            })
-
+            items.append(
+                {
+                    "name": name,
+                    "rarity": rarity,
+                    "shop_value": shop_value or "—",
+                    "min_trade": min_trade or "—",
+                }
+            )
     return items
 
 
-LOOT_TABLE: Dict[
-    str,
-    List[
-        Tuple[str, str]
-    ]
-] = {}
-
-LOOT_DETAILS: List[
-    Dict[str, str]
-] = []
-
+LOOT_TABLE: Dict[str, List[Tuple[str, str]]] = {}
+LOOT_DETAILS: List[Dict[str, str]] = []
 
 for rarity in RARITY_ORDER:
-    path = _repo_path(
-        f"Guild Loot List - {rarity}.csv"
-    )
+    path = _repo_path(f"Guild Loot List - {rarity}.csv")
+    LOOT_TABLE[rarity] = load_loot_csv(path)
+    LOOT_DETAILS.extend(load_loot_details_csv(path, rarity))
 
-    LOOT_TABLE[
-        rarity
-    ] = load_loot_csv(
-        path
-    )
-
-    LOOT_DETAILS.extend(
-        load_loot_details_csv(
-            path,
-            rarity
-        )
-    )
+print("Loot loaded:", {k: len(v) for k, v in LOOT_TABLE.items()}, flush=True)
+print(f"Loot details loaded: {len(LOOT_DETAILS)} items", flush=True)
 
 
-print(
-    "Loot loaded:",
-    {
-        k: len(v)
-        for k, v
-        in LOOT_TABLE.items()
-    },
-    flush=True
-)
-
-print(
-    f"Loot details loaded: "
-    f"{len(LOOT_DETAILS)} items",
-    flush=True
-)
-
-
-def rarity_for_level(
-    level: int
-) -> str:
-
+def rarity_for_level(level: int) -> str:
     if 2 <= level <= 4:
         return "Common"
-
     if 5 <= level <= 8:
         return "Uncommon"
-
     if 9 <= level <= 12:
         return "Rare"
-
     if 13 <= level <= 16:
         return "Very Rare"
-
     return "Legendary"
 
 
-def rarity_shift(
-    base: str,
-    roll: int,
-    level: int
-) -> str:
-
-    idx = RARITY_ORDER.index(
-        base
-    )
-
+def rarity_shift(base: str, roll: int, level: int) -> str:
+    # Quest Grandmaster rolls are capped at Legendary.
+    # A 100 can never automatically grant Artifact loot.
+    idx = RARITY_ORDER.index(base)
     if roll == 1:
-        idx = max(
-            0,
-            idx - 1
-        )
-
+        idx = max(0, idx - 1)
     elif roll == 100:
-        idx = min(
-            RARITY_ORDER.index(
-                "Legendary"
-            ),
-            idx + 1
-        )
-
-    return RARITY_ORDER[
-        idx
-    ]
+        idx = min(RARITY_ORDER.index("Legendary"), idx + 1)
+    return RARITY_ORDER[idx]
 
 
-def random_loot(
-    rarity: str
-) -> Optional[Tuple[str, str]]:
-
-    pool = (
-        LOOT_TABLE.get(
-            rarity
-        )
-        or []
-    )
-
-    if not pool:
-        return None
-
-    return random.choice(
-        pool
-    )
+def random_loot(rarity: str) -> Optional[Tuple[str, str]]:
+    pool = LOOT_TABLE.get(rarity) or []
+    return random.choice(pool) if pool else None
 
 
 # =========================
@@ -462,7 +197,6 @@ def random_loot(
 def ensure_schema():
     with db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS sessions (
                     message_id BIGINT PRIMARY KEY,
@@ -474,7 +208,6 @@ def ensure_schema():
                     guild_id BIGINT
                 )
             """)
-
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS participants (
                     message_id BIGINT,
@@ -488,39 +221,27 @@ def ensure_schema():
                     gp_dip INT DEFAULT 0,
                     specialist INT DEFAULT 0,
                     present INT DEFAULT 1,
-                    PRIMARY KEY (
-                        message_id,
-                        user_id
-                    )
+                    PRIMARY KEY (message_id, user_id)
                 )
             """)
-
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS keys (
                     guild_id BIGINT,
                     user_id BIGINT,
                     current INT DEFAULT 0,
                     lifetime INT DEFAULT 0,
-                    PRIMARY KEY (
-                        guild_id,
-                        user_id
-                    )
+                    PRIMARY KEY (guild_id, user_id)
                 )
             """)
-
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS specialist_coins (
                     guild_id BIGINT,
                     user_id BIGINT,
                     current INT DEFAULT 0,
                     lifetime INT DEFAULT 0,
-                    PRIMARY KEY (
-                        guild_id,
-                        user_id
-                    )
+                    PRIMARY KEY (guild_id, user_id)
                 )
             """)
-
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS session_events (
                     id BIGSERIAL PRIMARY KEY,
@@ -535,139 +256,69 @@ def ensure_schema():
 
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS critmas_currency (
-                    guild_id BIGINT,
-                    user_id BIGINT,
-                    pumpkins_current INT DEFAULT 0,
-                    pumpkins_lifetime INT DEFAULT 0,
-                    trees_current INT DEFAULT 0,
-                    trees_lifetime INT DEFAULT 0,
-                    PRIMARY KEY (
-                        guild_id,
-                        user_id
-                    )
+                    guild_id BIGINT, user_id BIGINT,
+                    pumpkins_current INT DEFAULT 0, pumpkins_lifetime INT DEFAULT 0,
+                    trees_current INT DEFAULT 0, trees_lifetime INT DEFAULT 0,
+                    PRIMARY KEY (guild_id, user_id)
                 )
             """)
-
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS critmas_rp_daily (
-                    guild_id BIGINT,
-                    user_id BIGINT,
-                    event_date DATE,
+                    guild_id BIGINT, user_id BIGINT, event_date DATE,
                     pumpkins_awarded INT DEFAULT 0,
-                    PRIMARY KEY (
-                        guild_id,
-                        user_id,
-                        event_date
-                    )
+                    PRIMARY KEY (guild_id, user_id, event_date)
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS critmas_rp_session_progress (
+                    session_message_id BIGINT, user_id BIGINT,
+                    rewarded_hours_processed INT DEFAULT 0,
+                    pumpkins_awarded INT DEFAULT 0,
+                    pumpkins_blocked INT DEFAULT 0,
+                    PRIMARY KEY (session_message_id, user_id)
                 )
             """)
 
             for sql in (
-                "ALTER TABLE sessions "
-                "ADD COLUMN IF NOT EXISTS guild_id BIGINT",
-
-                "ALTER TABLE sessions "
-                "ADD COLUMN IF NOT EXISTS run_seconds DOUBLE PRECISION",
-
-                "ALTER TABLE sessions "
-                "ADD COLUMN IF NOT EXISTS ended_at DOUBLE PRECISION",
-
-                "ALTER TABLE participants "
-                "ADD COLUMN IF NOT EXISTS capped INT DEFAULT 0",
-
-                "ALTER TABLE participants "
-                "ADD COLUMN IF NOT EXISTS last_tick DOUBLE PRECISION",
-
-                "ALTER TABLE participants "
-                "ADD COLUMN IF NOT EXISTS xp_dip INT DEFAULT 0",
-
-                "ALTER TABLE participants "
-                "ADD COLUMN IF NOT EXISTS gp_dip INT DEFAULT 0",
-
-                "ALTER TABLE participants "
-                "ADD COLUMN IF NOT EXISTS specialist INT DEFAULT 0",
-
-                "ALTER TABLE participants "
-                "ADD COLUMN IF NOT EXISTS present INT DEFAULT 1",
+                "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS guild_id BIGINT",
+                "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS run_seconds DOUBLE PRECISION",
+                "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ended_at DOUBLE PRECISION",
+                "ALTER TABLE participants ADD COLUMN IF NOT EXISTS capped INT DEFAULT 0",
+                "ALTER TABLE participants ADD COLUMN IF NOT EXISTS last_tick DOUBLE PRECISION",
+                "ALTER TABLE participants ADD COLUMN IF NOT EXISTS xp_dip INT DEFAULT 0",
+                "ALTER TABLE participants ADD COLUMN IF NOT EXISTS gp_dip INT DEFAULT 0",
+                "ALTER TABLE participants ADD COLUMN IF NOT EXISTS specialist INT DEFAULT 0",
+                "ALTER TABLE participants ADD COLUMN IF NOT EXISTS present INT DEFAULT 1",
             ):
-                cur.execute(
-                    sql
-                )
+                cur.execute(sql)
 
-            cur.execute(
-                "UPDATE sessions "
-                "SET run_seconds=COALESCE(run_seconds,0) "
-                "WHERE run_seconds IS NULL"
-            )
-
-            cur.execute(
-                "UPDATE participants "
-                "SET seconds=COALESCE(seconds,0) "
-                "WHERE seconds IS NULL"
-            )
-
-            cur.execute(
-                "UPDATE participants "
-                "SET capped=COALESCE(capped,0) "
-                "WHERE capped IS NULL"
-            )
-
-            cur.execute(
-                "UPDATE participants "
-                "SET xp_dip=COALESCE(xp_dip,0) "
-                "WHERE xp_dip IS NULL"
-            )
-
-            cur.execute(
-                "UPDATE participants "
-                "SET gp_dip=COALESCE(gp_dip,0) "
-                "WHERE gp_dip IS NULL"
-            )
-
-            cur.execute(
-                "UPDATE participants "
-                "SET specialist=COALESCE(specialist,0) "
-                "WHERE specialist IS NULL"
-            )
-
-            cur.execute(
-                "UPDATE participants "
-                "SET present=COALESCE(present,1) "
-                "WHERE present IS NULL"
-            )
+            cur.execute("UPDATE sessions SET run_seconds=COALESCE(run_seconds,0) WHERE run_seconds IS NULL")
+            cur.execute("UPDATE participants SET seconds=COALESCE(seconds,0) WHERE seconds IS NULL")
+            cur.execute("UPDATE participants SET capped=COALESCE(capped,0) WHERE capped IS NULL")
+            cur.execute("UPDATE participants SET xp_dip=COALESCE(xp_dip,0) WHERE xp_dip IS NULL")
+            cur.execute("UPDATE participants SET gp_dip=COALESCE(gp_dip,0) WHERE gp_dip IS NULL")
+            cur.execute("UPDATE participants SET specialist=COALESCE(specialist,0) WHERE specialist IS NULL")
+            cur.execute("UPDATE participants SET present=COALESCE(present,1) WHERE present IS NULL")
 
             cur.execute("""
                 UPDATE sessions AS s
                 SET ended_at=e.ended_at
                 FROM (
-                    SELECT
-                        session_message_id,
-                        MAX(created_at) AS ended_at
+                    SELECT session_message_id, MAX(created_at) AS ended_at
                     FROM session_events
                     WHERE event_type='end'
                     GROUP BY session_message_id
                 ) AS e
-                WHERE
-                    s.message_id=e.session_message_id
-                    AND s.ended_at IS NULL
+                WHERE s.message_id=e.session_message_id
+                  AND s.ended_at IS NULL
             """)
-
             cur.execute("""
-                CREATE INDEX IF NOT EXISTS
-                    idx_sessions_guild_ended
-                ON sessions (
-                    guild_id,
-                    ended_at
-                )
+                CREATE INDEX IF NOT EXISTS idx_sessions_guild_ended
+                ON sessions (guild_id, ended_at)
             """)
-
             cur.execute("""
-                CREATE INDEX IF NOT EXISTS
-                    idx_participants_user_message
-                ON participants (
-                    user_id,
-                    message_id
-                )
+                CREATE INDEX IF NOT EXISTS idx_participants_user_message
+                ON participants (user_id, message_id)
             """)
 
 
@@ -677,109 +328,42 @@ ensure_schema()
 # =========================
 # RP REWARD RULES
 # =========================
-def reward_hours(
-    seconds: float
-) -> int:
-    return int(
-        (
-            max(
-                0.0,
-                seconds
-            )
-            + 900
-        )
-        // 3600
-    )
+def reward_hours(seconds: float) -> int:
+    return int((max(0.0, seconds) + 900) // 3600)
 
 
-def xp_per_hour_for_level(
-    level: int
-) -> int:
-
+def xp_per_hour_for_level(level: int) -> int:
     if 2 <= level <= 4:
         return 300
-
     if 5 <= level <= 8:
         return 600
-
     if 9 <= level <= 12:
         return 800
-
     if 13 <= level <= 16:
         return 1000
-
     if 17 <= level <= 20:
         return 1200
-
     return 0
 
 
-def gp_per_hour_for_level(
-    level: int
-) -> int:
-    return max(
-        0,
-        int(level)
-    ) * 10
+def gp_per_hour_for_level(level: int) -> int:
+    return max(0, int(level)) * 10
 
 
-QUEST_XP: Dict[
-    int,
-    Tuple[int, int]
-] = {
-    2: (600, 1200),
-    3: (600, 1200),
-    4: (600, 1200),
-
-    5: (1200, 2400),
-    6: (1200, 2400),
-    7: (1200, 2400),
-    8: (1200, 2400),
-
-    9: (1600, 3200),
-    10: (1600, 3200),
-    11: (1600, 3200),
-    12: (1600, 3200),
-
-    13: (2000, 4000),
-    14: (2000, 4000),
-    15: (2000, 4000),
-    16: (2000, 4000),
-
-    17: (2400, 4800),
-    18: (2400, 4800),
-    19: (2400, 4800),
+QUEST_XP: Dict[int, Tuple[int, int]] = {
+    2: (600, 1200), 3: (600, 1200), 4: (600, 1200),
+    5: (1200, 2400), 6: (1200, 2400), 7: (1200, 2400), 8: (1200, 2400),
+    9: (1600, 3200), 10: (1600, 3200), 11: (1600, 3200), 12: (1600, 3200),
+    13: (2000, 4000), 14: (2000, 4000), 15: (2000, 4000), 16: (2000, 4000),
+    17: (2400, 4800), 18: (2400, 4800), 19: (2400, 4800),
 }
 
-
-QUEST_GP: Dict[
-    int,
-    Tuple[int, int]
-] = {
-    2: (100, 200),
-    3: (150, 300),
-    4: (200, 400),
-
-    5: (250, 500),
-    6: (300, 600),
-    7: (350, 700),
-    8: (400, 800),
-
-    9: (450, 900),
-    10: (500, 1000),
-    11: (550, 1100),
-    12: (600, 1200),
-
-    13: (650, 1300),
-    14: (700, 1400),
-    15: (750, 1500),
-    16: (800, 1600),
-
-    17: (850, 1700),
-    18: (900, 1800),
-    19: (950, 1900),
-
-    20: (1000, 2000),
+QUEST_GP: Dict[int, Tuple[int, int]] = {
+    2: (100, 200), 3: (150, 300), 4: (200, 400),
+    5: (250, 500), 6: (300, 600), 7: (350, 700), 8: (400, 800),
+    9: (450, 900), 10: (500, 1000), 11: (550, 1100), 12: (600, 1200),
+    13: (650, 1300), 14: (700, 1400), 15: (750, 1500), 16: (800, 1600),
+    17: (850, 1700), 18: (900, 1800), 19: (950, 1900), 20: (1000, 2000),
 }
 
 
@@ -787,80 +371,36 @@ QUEST_GP: Dict[
 # THEME / BOT
 # =========================
 def theme_color() -> discord.Color:
-    raw = os.getenv(
-        "THEME_COLOR",
-        "#C9A227"
-    ).lstrip("#")
-
+    raw = os.getenv("THEME_COLOR", "#C9A227").lstrip("#")
     try:
-        return discord.Color(
-            int(
-                raw,
-                16
-            )
-        )
-
+        return discord.Color(int(raw, 16))
     except Exception:
         return discord.Color.gold()
 
 
-def apply_theme(
-    embed: discord.Embed,
-    *,
-    footer_text_override: Optional[str] = None
-) -> discord.Embed:
-
+def apply_theme(embed: discord.Embed, *, footer_text_override: Optional[str] = None) -> discord.Embed:
     embed.color = theme_color()
-
-    thumb = os.getenv(
-        "THEME_THUMBNAIL_URL"
-    )
-
-    banner = os.getenv(
-        "THEME_BANNER_URL"
-    )
-
+    thumb = os.getenv("THEME_THUMBNAIL_URL")
+    banner = os.getenv("THEME_BANNER_URL")
     if thumb:
-        embed.set_thumbnail(
-            url=thumb
-        )
-
+        embed.set_thumbnail(url=thumb)
     if banner:
-        embed.set_image(
-            url=banner
-        )
-
-    embed.set_author(
-        name=os.getenv(
-            "THEME_NAME",
-            "Adventurer’s Guild Ledger"
-        )
-    )
+        embed.set_image(url=banner)
+    embed.set_author(name=os.getenv("THEME_NAME", "Adventurer’s Guild Ledger"))
 
     footer_text = (
         footer_text_override
         if footer_text_override is not None
         else os.getenv(
             "THEME_FOOTER_TEXT",
-            "Stamped & filed by the Guild Registrar • Rewards granted on 45-minute marks"
+            "Stamped & filed by the Guild Registrar • Rewards granted on 45-minute marks",
         )
     )
-
-    footer_icon = os.getenv(
-        "THEME_FOOTER_ICON_URL"
-    )
-
+    footer_icon = os.getenv("THEME_FOOTER_ICON_URL")
     if footer_icon:
-        embed.set_footer(
-            text=footer_text,
-            icon_url=footer_icon
-        )
-
+        embed.set_footer(text=footer_text, icon_url=footer_icon)
     else:
-        embed.set_footer(
-            text=footer_text
-        )
-
+        embed.set_footer(text=footer_text)
     return embed
 
 
@@ -868,1860 +408,538 @@ intents = discord.Intents.default()
 intents.guilds = True
 intents.members = True
 intents.message_content = True
-
-bot = commands.Bot(
-    command_prefix="!",
-    intents=intents
-)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 
 # =========================
 # KEEPALIVE
 # =========================
-async def handle_root(
-    _: web.Request
-) -> web.Response:
-
-    return web.Response(
-        text="RP Tracker is running."
-    )
+async def handle_root(_: web.Request) -> web.Response:
+    return web.Response(text="RP Tracker is running.")
 
 
-async def handle_health(
-    _: web.Request
-) -> web.Response:
-
-    return web.Response(
-        text="ok"
-    )
+async def handle_health(_: web.Request) -> web.Response:
+    return web.Response(text="ok")
 
 
 async def start_web_server():
-    port = int(
-        os.getenv(
-            "PORT",
-            "8080"
-        )
-    )
-
+    port = int(os.getenv("PORT", "8080"))
     app = web.Application()
-
-    app.router.add_get(
-        "/",
-        handle_root
-    )
-
-    app.router.add_get(
-        "/health",
-        handle_health
-    )
-
-    runner = web.AppRunner(
-        app
-    )
-
+    app.router.add_get("/", handle_root)
+    app.router.add_get("/health", handle_health)
+    runner = web.AppRunner(app)
     await runner.setup()
-
-    site = web.TCPSite(
-        runner,
-        "0.0.0.0",
-        port
-    )
-
+    site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-
-    print(
-        f"Web server listening on 0.0.0.0:{port}",
-        flush=True
-    )
+    print(f"Web server listening on 0.0.0.0:{port}", flush=True)
 
 
 # =========================
 # KEY / SPECIALIST HELPERS
 # =========================
-def keys_get(
-    guild_id: int,
-    user_id: int
-) -> Tuple[int, int]:
-
+def keys_get(guild_id: int, user_id: int) -> Tuple[int, int]:
     with db() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    current,
-                    lifetime
-                FROM keys
-                WHERE
-                    guild_id=%s
-                    AND user_id=%s
-                """,
-                (
-                    guild_id,
-                    user_id
-                )
-            )
-
+            cur.execute("SELECT current,lifetime FROM keys WHERE guild_id=%s AND user_id=%s", (guild_id, user_id))
             row = cur.fetchone()
-
-    if not row:
-        return 0, 0
-
-    return (
-        int(
-            row[0]
-            or 0
-        ),
-        int(
-            row[1]
-            or 0
-        )
-    )
+    return (int(row[0] or 0), int(row[1] or 0)) if row else (0, 0)
 
 
-def keys_add(
-    guild_id: int,
-    user_id: int,
-    amount: int
-):
-    amount = int(
-        amount
-    )
-
+def keys_add(guild_id: int, user_id: int, amount: int):
+    amount = int(amount)
     if amount <= 0:
         return
-
     with db() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO keys (
-                    guild_id,
-                    user_id,
-                    current,
-                    lifetime
-                )
-                VALUES (
-                    %s,
-                    %s,
-                    %s,
-                    %s
-                )
-                ON CONFLICT (
-                    guild_id,
-                    user_id
-                )
+            cur.execute("""
+                INSERT INTO keys (guild_id,user_id,current,lifetime)
+                VALUES (%s,%s,%s,%s)
+                ON CONFLICT (guild_id,user_id)
                 DO UPDATE SET
-                    current =
-                        keys.current
-                        + EXCLUDED.current,
-                    lifetime =
-                        keys.lifetime
-                        + EXCLUDED.lifetime
-                """,
-                (
-                    guild_id,
-                    user_id,
-                    amount,
-                    amount
-                )
-            )
+                    current=keys.current+EXCLUDED.current,
+                    lifetime=keys.lifetime+EXCLUDED.lifetime
+            """, (guild_id, user_id, amount, amount))
 
 
-def keys_sub(
-    guild_id: int,
-    user_id: int,
-    amount: int
-):
-    amount = int(
-        amount
-    )
-
+def keys_sub(guild_id: int, user_id: int, amount: int):
+    amount = int(amount)
     if amount <= 0:
         return
-
     with db() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO keys (
-                    guild_id,
-                    user_id,
-                    current,
-                    lifetime
-                )
-                VALUES (
-                    %s,
-                    %s,
-                    0,
-                    0
-                )
-                ON CONFLICT (
-                    guild_id,
-                    user_id
-                )
-                DO NOTHING
-                """,
-                (
-                    guild_id,
-                    user_id
-                )
-            )
-
-            cur.execute(
-                """
-                UPDATE keys
-                SET current = GREATEST(
-                    current - %s,
-                    0
-                )
-                WHERE
-                    guild_id=%s
-                    AND user_id=%s
-                """,
-                (
-                    amount,
-                    guild_id,
-                    user_id
-                )
-            )
+            cur.execute("""
+                INSERT INTO keys (guild_id,user_id,current,lifetime)
+                VALUES (%s,%s,0,0)
+                ON CONFLICT (guild_id,user_id) DO NOTHING
+            """, (guild_id, user_id))
+            cur.execute("""
+                UPDATE keys SET current=GREATEST(current-%s,0)
+                WHERE guild_id=%s AND user_id=%s
+            """, (amount, guild_id, user_id))
 
 
-def build_key_embed(
-    member: discord.Member,
-    current: int,
-    lifetime: int
-) -> discord.Embed:
-
-    embed = discord.Embed(
-        title=(
-            f"🗝️ "
-            f"{member.display_name}'s Keyring"
-        ),
-        color=theme_color()
-    )
-
-    embed.add_field(
-        name="Current Keys",
-        value=str(
-            current
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="Lifetime Keys",
-        value=str(
-            lifetime
-        ),
-        inline=False
-    )
-
-    key_thumb = (
-        os.getenv(
-            "KEY_THUMBNAIL_URL"
-        )
-        or os.getenv(
-            "THEME_THUMBNAIL_URL"
-        )
-    )
-
+def build_key_embed(member: discord.Member, current: int, lifetime: int) -> discord.Embed:
+    embed = discord.Embed(title=f"🗝️ {member.display_name}'s Keyring", color=theme_color())
+    embed.add_field(name="Current Keys", value=str(current), inline=False)
+    embed.add_field(name="Lifetime Keys", value=str(lifetime), inline=False)
+    key_thumb = os.getenv("KEY_THUMBNAIL_URL") or os.getenv("THEME_THUMBNAIL_URL")
     if key_thumb:
-        embed.set_thumbnail(
-            url=key_thumb
-        )
-
-    return apply_theme(
-        embed,
-        footer_text_override=(
-            "Stamped & filed by "
-            "the Guild Registrar"
-        )
-    )
+        embed.set_thumbnail(url=key_thumb)
+    return apply_theme(embed, footer_text_override="Stamped & filed by the Guild Registrar")
 
 
-def special_get(
-    guild_id: int,
-    user_id: int
-) -> Tuple[int, int]:
-
+def special_get(guild_id: int, user_id: int) -> Tuple[int, int]:
     with db() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """
-                SELECT
-                    current,
-                    lifetime
-                FROM specialist_coins
-                WHERE
-                    guild_id=%s
-                    AND user_id=%s
-                """,
-                (
-                    guild_id,
-                    user_id
-                )
+                "SELECT current,lifetime FROM specialist_coins WHERE guild_id=%s AND user_id=%s",
+                (guild_id, user_id),
             )
-
             row = cur.fetchone()
-
-    if not row:
-        return 0, 0
-
-    return (
-        int(
-            row[0]
-            or 0
-        ),
-        int(
-            row[1]
-            or 0
-        )
-    )
+    return (int(row[0] or 0), int(row[1] or 0)) if row else (0, 0)
 
 
-def special_add(
-    guild_id: int,
-    user_id: int,
-    amount: int
-):
-    amount = int(
-        amount
-    )
-
+def special_add(guild_id: int, user_id: int, amount: int):
+    amount = int(amount)
     if amount <= 0:
         return
-
     with db() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO specialist_coins (
-                    guild_id,
-                    user_id,
-                    current,
-                    lifetime
-                )
-                VALUES (
-                    %s,
-                    %s,
-                    %s,
-                    %s
-                )
-                ON CONFLICT (
-                    guild_id,
-                    user_id
-                )
+            cur.execute("""
+                INSERT INTO specialist_coins (guild_id,user_id,current,lifetime)
+                VALUES (%s,%s,%s,%s)
+                ON CONFLICT (guild_id,user_id)
                 DO UPDATE SET
-                    current =
-                        specialist_coins.current
-                        + EXCLUDED.current,
-                    lifetime =
-                        specialist_coins.lifetime
-                        + EXCLUDED.lifetime
-                """,
-                (
-                    guild_id,
-                    user_id,
-                    amount,
-                    amount
-                )
-            )
+                    current=specialist_coins.current+EXCLUDED.current,
+                    lifetime=specialist_coins.lifetime+EXCLUDED.lifetime
+            """, (guild_id, user_id, amount, amount))
 
 
-def special_sub(
-    guild_id: int,
-    user_id: int,
-    amount: int
-):
-    amount = int(
-        amount
-    )
-
+def special_sub(guild_id: int, user_id: int, amount: int):
+    amount = int(amount)
     if amount <= 0:
         return
-
     with db() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO specialist_coins (
-                    guild_id,
-                    user_id,
-                    current,
-                    lifetime
-                )
-                VALUES (
-                    %s,
-                    %s,
-                    0,
-                    0
-                )
-                ON CONFLICT (
-                    guild_id,
-                    user_id
-                )
-                DO NOTHING
-                """,
-                (
-                    guild_id,
-                    user_id
-                )
-            )
-
-            cur.execute(
-                """
-                UPDATE specialist_coins
-                SET current = GREATEST(
-                    current - %s,
-                    0
-                )
-                WHERE
-                    guild_id=%s
-                    AND user_id=%s
-                """,
-                (
-                    amount,
-                    guild_id,
-                    user_id
-                )
-            )
+            cur.execute("""
+                INSERT INTO specialist_coins (guild_id,user_id,current,lifetime)
+                VALUES (%s,%s,0,0)
+                ON CONFLICT (guild_id,user_id) DO NOTHING
+            """, (guild_id, user_id))
+            cur.execute("""
+                UPDATE specialist_coins SET current=GREATEST(current-%s,0)
+                WHERE guild_id=%s AND user_id=%s
+            """, (amount, guild_id, user_id))
 
 
-def build_special_embed(
-    member: discord.Member,
-    current: int,
-    lifetime: int
-) -> discord.Embed:
-
-    embed = discord.Embed(
-        title=(
-            f"🪙 "
-            f"{member.display_name}'s "
-            f"Specialist Purse"
-        ),
-        color=theme_color()
-    )
-
-    embed.add_field(
-        name="Current Coins",
-        value=str(
-            current
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="Lifetime Coins",
-        value=str(
-            lifetime
-        ),
-        inline=False
-    )
-
-    special_thumb = (
-        os.getenv(
-            "SPECIAL_THUMBNAIL_URL"
-        )
-        or os.getenv(
-            "THEME_THUMBNAIL_URL"
-        )
-    )
-
+def build_special_embed(member: discord.Member, current: int, lifetime: int) -> discord.Embed:
+    embed = discord.Embed(title=f"🪙 {member.display_name}'s Specialist Purse", color=theme_color())
+    embed.add_field(name="Current Coins", value=str(current), inline=False)
+    embed.add_field(name="Lifetime Coins", value=str(lifetime), inline=False)
+    special_thumb = os.getenv("SPECIAL_THUMBNAIL_URL") or os.getenv("THEME_THUMBNAIL_URL")
     if special_thumb:
-        embed.set_thumbnail(
-            url=special_thumb
-        )
-
-    return apply_theme(
-        embed,
-        footer_text_override=(
-            "Stamped & filed in "
-            "the Specialist Ledger"
-        )
-    )
+        embed.set_thumbnail(url=special_thumb)
+    return apply_theme(embed, footer_text_override="Stamped & filed in the Specialist Ledger")
 
 
 # =========================
-# NIGHTMARE BEFORE CRITMAS
-# CURRENCY HELPERS
+# NIGHTMARE BEFORE CRITMAS HELPERS
 # =========================
-def critmas_add_trees(
-    guild_id: int,
-    user_id: int,
-    amount: int
-):
-    amount = int(
-        amount
-    )
-
-    if amount <= 0:
-        return
-
+def critmas_get(guild_id: int, user_id: int) -> Tuple[int, int, int, int]:
     with db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO critmas_currency (
-                    guild_id,
-                    user_id,
-                    pumpkins_current,
-                    pumpkins_lifetime,
-                    trees_current,
-                    trees_lifetime
-                )
-                VALUES (
-                    %s,
-                    %s,
-                    0,
-                    0,
-                    %s,
-                    %s
-                )
-                ON CONFLICT (
-                    guild_id,
-                    user_id
-                )
-                DO UPDATE SET
-                    trees_current =
-                        critmas_currency.trees_current
-                        + EXCLUDED.trees_current,
-                    trees_lifetime =
-                        critmas_currency.trees_lifetime
-                        + EXCLUDED.trees_lifetime
-            """, (
-                guild_id,
-                user_id,
-                amount,
-                amount
-            ))
-
-
-def critmas_add_rp_pumpkins(
-    guild_id: int,
-    user_id: int,
-    rp_started_at: float,
-    rp_seconds: int
-) -> Tuple[int, int]:
-    """
-    Awards Nightmare Before Critmas pumpkins based on when each
-    rewarded RP hour was actually earned.
-
-    RP reward thresholds follow the bot's normal rule:
-        45 minutes = 1 rewarded hour
-        1h45m = 2
-        2h45m = 3
-        etc.
-
-    Each rewarded hour is assigned to the Central-time calendar
-    date on which its threshold was crossed.
-
-    Maximum: 5 pumpkins per player per Central calendar day.
-
-    Returns:
-        (pumpkins_awarded, pumpkins_blocked_by_daily_cap)
-    """
-
-    if not nightmare_event_active():
-        return 0, 0
-
-    rp_seconds = max(
-        0,
-        int(rp_seconds)
-    )
-
-    total_reward_hours = reward_hours(
-        rp_seconds
-    )
-
-    if total_reward_hours <= 0:
-        return 0, 0
-
-    # -------------------------------------------------
-    # Determine the Central-time date on which each
-    # rewarded RP hour was actually earned.
-    #
-    # Reward #1 = 45 minutes after joining
-    # Reward #2 = 1h45m after joining
-    # Reward #3 = 2h45m after joining
-    # etc.
-    # -------------------------------------------------
-
-    pumpkins_by_date: Dict[
-        object,
-        int
-    ] = {}
-
-    for reward_number in range(
-        total_reward_hours
-    ):
-        threshold_seconds = (
-            2700
-            + (
-                reward_number
-                * 3600
-            )
-        )
-
-        threshold_timestamp = (
-            float(rp_started_at)
-            + threshold_seconds
-        )
-
-        threshold_datetime = (
-            datetime.fromtimestamp(
-                threshold_timestamp,
-                tz=NIGHTMARE_EVENT_TIMEZONE
-            )
-        )
-
-        # Only award thresholds that actually occurred
-        # during Nightmare Before Critmas.
-        if not (
-            NIGHTMARE_EVENT_START
-            <= threshold_datetime
-            < NIGHTMARE_EVENT_END
-        ):
-            continue
-
-        event_date = (
-            threshold_datetime.date()
-        )
-
-        pumpkins_by_date[
-            event_date
-        ] = (
-            pumpkins_by_date.get(
-                event_date,
-                0
-            )
-            + NIGHTMARE_RP_PUMPKINS_PER_HOUR
-        )
-
-    if not pumpkins_by_date:
-        return 0, 0
-
-    total_awarded = 0
-    total_blocked = 0
-
-    # -------------------------------------------------
-    # Apply each day's independent 5-pumpkin cap.
-    # -------------------------------------------------
-
-    with db() as conn:
-        with conn.cursor() as cur:
-
-            # Make sure the player's event wallet exists.
-            cur.execute("""
-                INSERT INTO critmas_currency (
-                    guild_id,
-                    user_id,
-                    pumpkins_current,
-                    pumpkins_lifetime,
-                    trees_current,
-                    trees_lifetime
-                )
-                VALUES (
-                    %s,
-                    %s,
-                    0,
-                    0,
-                    0,
-                    0
-                )
-                ON CONFLICT (
-                    guild_id,
-                    user_id
-                )
-                DO NOTHING
-            """, (
-                guild_id,
-                user_id
-            ))
-
-            for (
-                event_date,
-                requested
-            ) in sorted(
-                pumpkins_by_date.items()
-            ):
-
-                # Ensure this player's daily record exists.
-                cur.execute("""
-                    INSERT INTO critmas_rp_daily (
-                        guild_id,
-                        user_id,
-                        event_date,
-                        pumpkins_awarded
-                    )
-                    VALUES (
-                        %s,
-                        %s,
-                        %s,
-                        0
-                    )
-                    ON CONFLICT (
-                        guild_id,
-                        user_id,
-                        event_date
-                    )
-                    DO NOTHING
-                """, (
-                    guild_id,
-                    user_id,
-                    event_date
-                ))
-
-                # Lock this day's record while calculating
-                # the remaining daily allowance.
-                cur.execute("""
-                    SELECT
-                        pumpkins_awarded
-                    FROM critmas_rp_daily
-                    WHERE
-                        guild_id=%s
-                        AND user_id=%s
-                        AND event_date=%s
-                    FOR UPDATE
-                """, (
-                    guild_id,
-                    user_id,
-                    event_date
-                ))
-
-                row = cur.fetchone()
-
-                already_awarded = (
-                    int(row[0] or 0)
-                    if row
-                    else 0
-                )
-
-                remaining_today = max(
-                    0,
-                    NIGHTMARE_RP_PUMPKIN_DAILY_CAP
-                    - already_awarded
-                )
-
-                actual_award = min(
-                    requested,
-                    remaining_today
-                )
-
-                blocked = max(
-                    0,
-                    requested
-                    - actual_award
-                )
-
-                if actual_award > 0:
-                    cur.execute("""
-                        UPDATE critmas_rp_daily
-                        SET
-                            pumpkins_awarded =
-                                pumpkins_awarded + %s
-                        WHERE
-                            guild_id=%s
-                            AND user_id=%s
-                            AND event_date=%s
-                    """, (
-                        actual_award,
-                        guild_id,
-                        user_id,
-                        event_date
-                    ))
-
-                    cur.execute("""
-                        UPDATE critmas_currency
-                        SET
-                            pumpkins_current =
-                                pumpkins_current + %s,
-                            pumpkins_lifetime =
-                                pumpkins_lifetime + %s
-                        WHERE
-                            guild_id=%s
-                            AND user_id=%s
-                    """, (
-                        actual_award,
-                        actual_award,
-                        guild_id,
-                        user_id
-                    ))
-
-                total_awarded += (
-                    actual_award
-                )
-
-                total_blocked += (
-                    blocked
-                )
-
-    return (
-        total_awarded,
-        total_blocked
-    )
-
-def critmas_get(
-    guild_id: int,
-    user_id: int
-) -> Tuple[int, int, int, int]:
-    """
-    Returns:
-    pumpkins_current,
-    pumpkins_lifetime,
-    trees_current,
-    trees_lifetime
-    """
-
-    with db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT
-                    pumpkins_current,
-                    pumpkins_lifetime,
-                    trees_current,
-                    trees_lifetime
-                FROM critmas_currency
-                WHERE
-                    guild_id=%s
-                    AND user_id=%s
-            """, (
-                guild_id,
-                user_id
-            ))
-
+                SELECT pumpkins_current,pumpkins_lifetime,trees_current,trees_lifetime
+                FROM critmas_currency WHERE guild_id=%s AND user_id=%s
+            """, (guild_id, user_id))
             row = cur.fetchone()
-
     if not row:
-        return (
-            0,
-            0,
-            0,
-            0
-        )
-
-    return (
-        int(row[0] or 0),
-        int(row[1] or 0),
-        int(row[2] or 0),
-        int(row[3] or 0)
-    )
+        return 0, 0, 0, 0
+    return tuple(int(v or 0) for v in row)
 
 
-def critmas_add_currency(
-    guild_id: int,
-    user_id: int,
-    currency: str,
-    amount: int
-):
-    """
-    Administrative additions.
-    Adds to both current and lifetime.
-    """
-
-    amount = int(
-        amount
-    )
-
+def critmas_add_currency(guild_id: int, user_id: int, currency: str, amount: int):
+    amount = int(amount)
     if amount <= 0:
         return
-
-    if currency == "pumpkin":
-        current_column = (
-            "pumpkins_current"
-        )
-
-        lifetime_column = (
-            "pumpkins_lifetime"
-        )
-
-    elif currency == "tree":
-        current_column = (
-            "trees_current"
-        )
-
-        lifetime_column = (
-            "trees_lifetime"
-        )
-
-    else:
-        raise ValueError(
-            "Invalid Critmas currency."
-        )
-
+    columns = {
+        "pumpkin": ("pumpkins_current", "pumpkins_lifetime"),
+        "tree": ("trees_current", "trees_lifetime"),
+    }
+    if currency not in columns:
+        raise ValueError("Invalid Critmas currency.")
+    current_col, lifetime_col = columns[currency]
     with db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
-                INSERT INTO critmas_currency (
-                    guild_id,
-                    user_id,
-                    pumpkins_current,
-                    pumpkins_lifetime,
-                    trees_current,
-                    trees_lifetime
-                )
-                VALUES (
-                    %s,
-                    %s,
-                    0,
-                    0,
-                    0,
-                    0
-                )
-                ON CONFLICT (
-                    guild_id,
-                    user_id
-                )
-                DO NOTHING
-            """, (
-                guild_id,
-                user_id
-            ))
-
-            cur.execute(
-                f"""
+                INSERT INTO critmas_currency
+                (guild_id,user_id,pumpkins_current,pumpkins_lifetime,trees_current,trees_lifetime)
+                VALUES (%s,%s,0,0,0,0)
+                ON CONFLICT (guild_id,user_id) DO NOTHING
+            """, (guild_id, user_id))
+            cur.execute(f"""
                 UPDATE critmas_currency
-                SET
-                    {current_column} =
-                        {current_column} + %s,
-                    {lifetime_column} =
-                        {lifetime_column} + %s
-                WHERE
-                    guild_id=%s
-                    AND user_id=%s
-                """,
-                (
-                    amount,
-                    amount,
-                    guild_id,
-                    user_id
-                )
-            )
+                SET {current_col}={current_col}+%s,
+                    {lifetime_col}={lifetime_col}+%s
+                WHERE guild_id=%s AND user_id=%s
+            """, (amount, amount, guild_id, user_id))
 
 
-def critmas_spend_currency(
-    guild_id: int,
-    user_id: int,
-    currency: str,
-    amount: int
-) -> bool:
-    """
-    Deducts from current balance only.
+def critmas_add_trees(guild_id: int, user_id: int, amount: int):
+    critmas_add_currency(guild_id, user_id, "tree", amount)
 
-    Returns True if successful.
-    Returns False if the player
-    doesn't have enough currency.
-    """
 
-    amount = int(
-        amount
-    )
-
+def critmas_spend_currency(guild_id: int, user_id: int, currency: str, amount: int) -> bool:
+    amount = int(amount)
     if amount <= 0:
         return False
-
-    if currency == "pumpkin":
-        column = (
-            "pumpkins_current"
-        )
-
-    elif currency == "tree":
-        column = (
-            "trees_current"
-        )
-
-    else:
-        raise ValueError(
-            "Invalid Critmas currency."
-        )
-
+    columns = {"pumpkin": "pumpkins_current", "tree": "trees_current"}
+    if currency not in columns:
+        raise ValueError("Invalid Critmas currency.")
+    col = columns[currency]
     with db() as conn:
         with conn.cursor() as cur:
+            cur.execute(f"""
+                UPDATE critmas_currency SET {col}={col}-%s
+                WHERE guild_id=%s AND user_id=%s AND {col}>=%s
+                RETURNING {col}
+            """, (amount, guild_id, user_id, amount))
+            return cur.fetchone() is not None
 
-            cur.execute(
-                f"""
-                UPDATE critmas_currency
-                SET
-                    {column} =
-                        {column} - %s
-                WHERE
-                    guild_id=%s
-                    AND user_id=%s
-                    AND {column} >= %s
-                RETURNING {column}
-                """,
-                (
-                    amount,
-                    guild_id,
-                    user_id,
-                    amount
-                )
+
+def critmas_award_rp_pumpkin_on_date(cur, guild_id: int, user_id: int, event_date) -> Tuple[int, int]:
+    """Award one RP-earned pumpkin for a specific Central date. Returns (awarded, blocked)."""
+    cur.execute("""
+        INSERT INTO critmas_currency
+        (guild_id,user_id,pumpkins_current,pumpkins_lifetime,trees_current,trees_lifetime)
+        VALUES (%s,%s,0,0,0,0)
+        ON CONFLICT (guild_id,user_id) DO NOTHING
+    """, (guild_id, user_id))
+    cur.execute("""
+        INSERT INTO critmas_rp_daily (guild_id,user_id,event_date,pumpkins_awarded)
+        VALUES (%s,%s,%s,0)
+        ON CONFLICT (guild_id,user_id,event_date) DO NOTHING
+    """, (guild_id, user_id, event_date))
+    cur.execute("""
+        SELECT pumpkins_awarded FROM critmas_rp_daily
+        WHERE guild_id=%s AND user_id=%s AND event_date=%s FOR UPDATE
+    """, (guild_id, user_id, event_date))
+    already = int((cur.fetchone() or [0])[0] or 0)
+    if already >= NIGHTMARE_RP_PUMPKIN_DAILY_CAP:
+        return 0, 1
+    cur.execute("""
+        UPDATE critmas_rp_daily SET pumpkins_awarded=pumpkins_awarded+1
+        WHERE guild_id=%s AND user_id=%s AND event_date=%s
+    """, (guild_id, user_id, event_date))
+    cur.execute("""
+        UPDATE critmas_currency
+        SET pumpkins_current=pumpkins_current+1,
+            pumpkins_lifetime=pumpkins_lifetime+1
+        WHERE guild_id=%s AND user_id=%s
+    """, (guild_id, user_id))
+    return 1, 0
+
+
+def process_critmas_thresholds(cur, guild_id: int, message_id: int, user_id: int,
+                               old_seconds: float, new_seconds: float,
+                               interval_started_at: float):
+    """Process newly crossed 45m, 1h45m, 2h45m... thresholds exactly once."""
+    old_hours = reward_hours(old_seconds)
+    new_hours = reward_hours(new_seconds)
+    if new_hours <= old_hours:
+        return
+    cur.execute("""
+        INSERT INTO critmas_rp_session_progress
+        (session_message_id,user_id,rewarded_hours_processed,pumpkins_awarded,pumpkins_blocked)
+        VALUES (%s,%s,0,0,0)
+        ON CONFLICT (session_message_id,user_id) DO NOTHING
+    """, (message_id, user_id))
+    cur.execute("""
+        SELECT rewarded_hours_processed FROM critmas_rp_session_progress
+        WHERE session_message_id=%s AND user_id=%s FOR UPDATE
+    """, (message_id, user_id))
+    processed = int((cur.fetchone() or [0])[0] or 0)
+    start_reward = max(old_hours + 1, processed + 1)
+    awarded_total = blocked_total = 0
+    for reward_number in range(start_reward, new_hours + 1):
+        threshold_seconds = 2700 + ((reward_number - 1) * 3600)
+        seconds_into_interval = max(0.0, threshold_seconds - old_seconds)
+        earned_ts = interval_started_at + seconds_into_interval
+        earned_dt = datetime.fromtimestamp(earned_ts, tz=NIGHTMARE_EVENT_TIMEZONE)
+        if NIGHTMARE_EVENT_START <= earned_dt < NIGHTMARE_EVENT_END:
+            a, b = critmas_award_rp_pumpkin_on_date(
+                cur, guild_id, user_id, earned_dt.date()
             )
+            awarded_total += a
+            blocked_total += b
+    cur.execute("""
+        UPDATE critmas_rp_session_progress
+        SET rewarded_hours_processed=GREATEST(rewarded_hours_processed,%s),
+            pumpkins_awarded=pumpkins_awarded+%s,
+            pumpkins_blocked=pumpkins_blocked+%s
+        WHERE session_message_id=%s AND user_id=%s
+    """, (new_hours, awarded_total, blocked_total, message_id, user_id))
 
+
+def critmas_session_result(message_id: int, user_id: int) -> Tuple[int, int]:
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT pumpkins_awarded,pumpkins_blocked
+                FROM critmas_rp_session_progress
+                WHERE session_message_id=%s AND user_id=%s
+            """, (message_id, user_id))
             row = cur.fetchone()
-
-    return (
-        row is not None
-    )
+    return (int(row[0] or 0), int(row[1] or 0)) if row else (0, 0)
 
 
-def build_critmas_embed(
-    member: discord.Member
-) -> discord.Embed:
-
-    (
-        pumpkins_current,
-        pumpkins_lifetime,
-        trees_current,
-        trees_lifetime
-    ) = critmas_get(
-        member.guild.id,
-        member.id
-    )
-
-    combined_current = (
-        pumpkins_current
-        + trees_current
-    )
-
+def build_critmas_embed(member: discord.Member) -> discord.Embed:
+    pc, pl, tc, tl = critmas_get(member.guild.id, member.id)
+    combined = pc + tc
     embed = discord.Embed(
-        title=(
-            "🎃 Nightmare Before Critmas 🎄"
-        ),
-        description=(
-            f"### {member.display_name}'s "
-            f"Event Ledger"
-        ),
-        color=theme_color()
+        title="🎃 Nightmare Before Critmas 🎄",
+        description=f"### {member.display_name}'s Event Ledger",
+        color=theme_color(),
     )
+    embed.add_field(name="🎃 Pumpkins", value=f"**{pc} 🎃**", inline=True)
+    embed.add_field(name="🎄 Trees", value=f"**{tc} 🎄**", inline=True)
+    embed.add_field(name="🎁 Combined Current", value=f"**{combined} / 100**", inline=False)
+    embed.add_field(name="📜 Lifetime Earned", value=f"🎃 **{pl}**\n🎄 **{tl}**", inline=False)
+    if combined >= 100:
+        embed.add_field(name="🎁 Grand Reward", value="**Grand Reward threshold reached!**", inline=False)
+    return apply_theme(embed, footer_text_override="Nightmare Before Critmas • November 1–30")
 
-    embed.add_field(
-        name="🎃 Pumpkins",
-        value=(
-            f"**{pumpkins_current} 🎃**"
-        ),
-        inline=True
-    )
 
-    embed.add_field(
-        name="🎄 Trees",
-        value=(
-            f"**{trees_current} 🎄**"
-        ),
-        inline=True
-    )
-
-    embed.add_field(
-        name="🎁 Combined Current",
-        value=(
-            f"**{combined_current} / 100**"
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="📜 Lifetime Earned",
-        value=(
-            f"🎃 **{pumpkins_lifetime}**\n"
-            f"🎄 **{trees_lifetime}**"
-        ),
-        inline=False
-    )
-
-    if combined_current >= 100:
-        embed.add_field(
-            name="🎁 Grand Reward",
-            value=(
-                "**Grand Reward threshold reached!**\n"
-                "You currently have enough combined "
-                "event currency to redeem a reward."
-            ),
-            inline=False
-        )
-
-    return apply_theme(
-        embed,
-        footer_text_override=(
-            "Nightmare Before Critmas • "
-            "November 1–30"
-        )
-    )
 # =========================
 # SESSION HELPERS
 # =========================
-def log_session_event(
-    session_message_id: int,
-    event_type: str,
-    event_message_id: int,
-    channel_id: int,
-    guild_id: int
-):
+def log_session_event(session_message_id: int, event_type: str, event_message_id: int, channel_id: int, guild_id: int):
     with db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
-                INSERT INTO session_events (
-                    session_message_id,
-                    event_type,
-                    event_message_id,
-                    channel_id,
-                    guild_id,
-                    created_at
-                )
-                VALUES (
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s
-                )
-            """, (
-                session_message_id,
-                event_type,
-                event_message_id,
-                channel_id,
-                guild_id,
-                time.time()
-            ))
+                INSERT INTO session_events
+                (session_message_id,event_type,event_message_id,channel_id,guild_id,created_at)
+                VALUES (%s,%s,%s,%s,%s,%s)
+            """, (session_message_id, event_type, event_message_id, channel_id, guild_id, time.time()))
 
 
-def get_session_events(
-    session_message_id: int
-) -> List[
-    Tuple[
-        str,
-        int,
-        int,
-        int
-    ]
-]:
-
+def get_session_events(session_message_id: int) -> List[Tuple[str, int, int, int]]:
     with db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
-                SELECT
-                    event_type,
-                    event_message_id,
-                    channel_id,
-                    guild_id
+                SELECT event_type,event_message_id,channel_id,guild_id
                 FROM session_events
                 WHERE session_message_id=%s
-                ORDER BY
-                    created_at ASC,
-                    id ASC
-            """, (
-                session_message_id,
-            ))
-
+                ORDER BY created_at ASC,id ASC
+            """, (session_message_id,))
             rows = cur.fetchall()
-
-    return [
-        (
-            str(
-                event_type
-            ),
-            int(
-                event_message_id
-            ),
-            int(
-                channel_id
-            ),
-            int(
-                guild_id
-            )
-        )
-        for (
-            event_type,
-            event_message_id,
-            channel_id,
-            guild_id
-        ) in rows
-    ]
+    return [(str(a), int(b), int(c), int(d)) for a, b, c, d in rows]
 
 
-def build_jump_link(
-    guild_id: int,
-    channel_id: int,
-    message_id: int
-) -> str:
-
-    return (
-        f"https://discord.com/channels/"
-        f"{guild_id}/"
-        f"{channel_id}/"
-        f"{message_id}"
-    )
+def build_jump_link(guild_id: int, channel_id: int, message_id: int) -> str:
+    return f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}"
 
 
-def get_session(
-    message_id: int
-) -> Tuple[
-    int,
-    Optional[float],
-    float,
-    Optional[int],
-    Optional[int]
-]:
-
+def get_session(message_id: int) -> Tuple[int, Optional[float], float, Optional[int], Optional[int]]:
     with db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
-                SELECT
-                    state,
-                    started_at,
-                    COALESCE(
-                        run_seconds,
-                        0
-                    ),
-                    channel_id,
-                    guild_id
-                FROM sessions
-                WHERE message_id=%s
-            """, (
-                message_id,
-            ))
-
+                SELECT state,started_at,COALESCE(run_seconds,0),channel_id,guild_id
+                FROM sessions WHERE message_id=%s
+            """, (message_id,))
             row = cur.fetchone()
 
     if not row:
-        return (
-            0,
-            None,
-            0.0,
-            None,
-            None
-        )
+        return 0, None, 0.0, None, None
 
     return (
-        int(
-            row[0]
-            or 0
-        ),
-        (
-            float(
-                row[1]
-            )
-            if row[1] is not None
-            else None
-        ),
-        float(
-            row[2]
-            or 0.0
-        ),
-        (
-            int(
-                row[3]
-            )
-            if row[3] is not None
-            else None
-        ),
-        (
-            int(
-                row[4]
-            )
-            if row[4] is not None
-            else None
-        ),
+        int(row[0] or 0),
+        float(row[1]) if row[1] is not None else None,
+        float(row[2] or 0.0),
+        int(row[3]) if row[3] is not None else None,
+        int(row[4]) if row[4] is not None else None,
     )
 
 
-def list_participants(
-    message_id: int
-) -> List[
-    Tuple[
-        int,
-        str,
-        int,
-        float,
-        int,
-        int,
-        int,
-        int
-    ]
-]:
-
+def list_participants(message_id: int) -> List[Tuple[int, str, int, float, int, int, int, int]]:
     with db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
-                SELECT
-                    user_id,
-                    character,
-                    level,
-                    COALESCE(
-                        seconds,
-                        0
-                    ),
-                    COALESCE(
-                        capped,
-                        0
-                    ),
-                    COALESCE(
-                        xp_dip,
-                        0
-                    ),
-                    COALESCE(
-                        gp_dip,
-                        0
-                    ),
-                    COALESCE(
-                        specialist,
-                        0
-                    )
+                SELECT user_id,character,level,COALESCE(seconds,0),
+                       COALESCE(capped,0),COALESCE(xp_dip,0),
+                       COALESCE(gp_dip,0),COALESCE(specialist,0)
                 FROM participants
                 WHERE message_id=%s
                 ORDER BY user_id
-            """, (
-                message_id,
-            ))
-
+            """, (message_id,))
             rows = cur.fetchall()
 
     return [
-        (
-            int(uid),
-            str(ch),
-            int(lvl),
-            float(secs),
-            int(cap),
-            int(xd),
-            int(gd),
-            int(spec)
-        )
-        for (
-            uid,
-            ch,
-            lvl,
-            secs,
-            cap,
-            xd,
-            gd,
-            spec
-        ) in rows
+        (int(uid), str(ch), int(lvl), float(secs), int(cap), int(xd), int(gd), int(spec))
+        for uid, ch, lvl, secs, cap, xd, gd, spec in rows
     ]
 
 
-def session_elapsed_seconds(
-    message_id: int
-) -> float:
-
-    (
-        state,
-        started_at,
-        run_seconds,
-        _,
-        _
-    ) = get_session(
-        message_id
-    )
-
-    if (
-        state == 1
-        and started_at is not None
-    ):
-        return (
-            run_seconds
-            + max(
-                0.0,
-                time.time()
-                - started_at
-            )
-        )
-
+def session_elapsed_seconds(message_id: int) -> float:
+    state, started_at, run_seconds, _, _ = get_session(message_id)
+    if state == 1 and started_at is not None:
+        return run_seconds + max(0.0, time.time() - started_at)
     return run_seconds
 
 
-def fmt_hm(
-    seconds: float
-) -> str:
-
-    seconds = max(
-        0.0,
-        seconds
-    )
-
-    h = int(
-        seconds
-        // 3600
-    )
-
-    m = int(
-        (
-            seconds
-            % 3600
-        )
-        // 60
-    )
-
-    return (
-        f"{h}h "
-        f"{m}m"
-    )
+def fmt_hm(seconds: float) -> str:
+    seconds = max(0.0, seconds)
+    return f"{int(seconds // 3600)}h {int((seconds % 3600) // 60)}m"
 
 
-def state_label(
-    state: int
-) -> str:
-
-    if state == 1:
-        return "🟢 Active"
-
-    if state == 2:
-        return "🟡 Paused"
-
-    return "⚪ Not Started"
+def state_label(state: int) -> str:
+    return "🟢 Active" if state == 1 else "🟡 Paused" if state == 2 else "⚪ Not Started"
 
 
-def tracker_url(
-    guild_id: int,
-    channel_id: int,
-    message_id: int
-) -> str:
-
-    return (
-        f"https://discord.com/channels/"
-        f"{guild_id}/"
-        f"{channel_id}/"
-        f"{message_id}"
-    )
+def tracker_url(guild_id: int, channel_id: int, message_id: int) -> str:
+    return f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}"
 
 
-def build_embed(
-    message_id: int
-) -> discord.Embed:
-
-    (
-        state,
-        _,
-        _,
-        _,
-        _
-    ) = get_session(
-        message_id
-    )
-
-    elapsed = session_elapsed_seconds(
-        message_id
-    )
-
-    parts = list_participants(
-        message_id
-    )
+def build_embed(message_id: int) -> discord.Embed:
+    state, _, _, _, _ = get_session(message_id)
+    elapsed = session_elapsed_seconds(message_id)
+    parts = list_participants(message_id)
 
     embed = discord.Embed(
-        title=(
-            "📜 The Grandmaster's Guild "
-            "— RP Session Log"
-        ),
-        description=(
-            "The registrar’s record of "
-            "attendance and session time."
-        )
+        title="📜 The Grandmaster's Guild — RP Session Log",
+        description="The registrar’s record of attendance and session time.",
     )
-
-    embed.add_field(
-        name="Status",
-        value=state_label(
-            state
-        ),
-        inline=True
-    )
-
-    embed.add_field(
-        name="Session Time",
-        value=(
-            f"⏳ **"
-            f"{fmt_hm(elapsed)}"
-            f"**"
-        ),
-        inline=True
-    )
+    embed.add_field(name="Status", value=state_label(state), inline=True)
+    embed.add_field(name="Session Time", value=f"⏳ **{fmt_hm(elapsed)}**", inline=True)
 
     if parts:
         roster_lines = []
-
-        for (
-            uid,
-            char,
-            lvl,
-            _secs,
-            cap,
-            reward_dip,
-            gp_dip,
-            specialist
-        ) in parts:
-
+        for uid, char, lvl, _secs, cap, reward_dip, gp_dip, specialist in parts:
             tags = []
-
             if specialist:
-                tags.append(
-                    "Specialist"
-                )
-
+                tags.append("Specialist")
                 if reward_dip == 1:
-                    tags.append(
-                        "🪙 DIP"
-                    )
-
+                    tags.append("🪙 DIP")
                 elif reward_dip == 2:
-                    tags.append(
-                        "🪙 DOUBLE DIP"
-                    )
-
-                level_text = (
-                    "Specialist"
-                )
-
+                    tags.append("🪙 DOUBLE DIP")
+                level_text = "Specialist"
             else:
                 if cap:
-                    tags.append(
-                        "Capped"
-                    )
+                    tags.append("Capped")
+                if not DOUBLE_RP_EVENT_ACTIVE and reward_dip:
+                    tags.append("XP DIP")
+                level_text = f"lvl {lvl}"
 
-                if (
-                    not DOUBLE_RP_EVENT_ACTIVE
-                    and reward_dip
-                ):
-                    tags.append(
-                        "XP DIP"
-                    )
+            if not DOUBLE_RP_EVENT_ACTIVE and gp_dip:
+                tags.append("GP DIP")
 
-                level_text = (
-                    f"lvl {lvl}"
-                )
-
-            if (
-                not DOUBLE_RP_EVENT_ACTIVE
-                and gp_dip
-            ):
-                tags.append(
-                    "GP DIP"
-                )
-
-            suffix = (
-                f" *("
-                f"{', '.join(tags)}"
-                f")*"
-                if tags
-                else ""
-            )
-
-            roster_lines.append(
-                f"<@{uid}> — "
-                f"**{char}** "
-                f"({level_text})"
-                f"{suffix}"
-            )
-
-        roster = "\n".join(
-            roster_lines
-        )
-
+            suffix = f" *({', '.join(tags)})*" if tags else ""
+            roster_lines.append(f"<@{uid}> — **{char}** ({level_text}){suffix}")
+        roster = "\n".join(roster_lines)
     else:
-        roster = (
-            "*No adventurers signed in yet.*"
-        )
+        roster = "*No adventurers signed in yet.*"
 
-    embed.add_field(
-        name="Roster",
-        value=roster[:1024],
-        inline=False
-    )
+    embed.add_field(name="Roster", value=roster[:1024], inline=False)
 
     reward_rule = (
-        "Earn **1 hour** at **00:45**, "
-        "**2 hours** at **01:45**, etc.\n"
-        "**Standard:** XP/hr by level • "
-        "GP/hr: level × 10\n"
+        "Earn **1 hour** at **00:45**, **2 hours** at **01:45**, etc.\n"
+        "**Standard:** XP/hr by level • GP/hr: level × 10\n"
         "**Capped / Level 20:** 🗝️/hr\n"
-        "**Specialist:** 2🪙 + 200 gp/hr • "
-        "DIP: 4🪙/hr • "
-        "Double DIP: 6🪙/hr"
+        "**Specialist:** 2🪙 + 200 gp/hr • DIP: 4🪙/hr • Double DIP: 6🪙/hr"
     )
-
     if DOUBLE_RP_EVENT_ACTIVE:
         reward_rule += (
-            "\n\n🎉 **Vamp's B'Day Bash Active:** "
-            "RP **XP and GP are automatically doubled**. "
+            "\n\n🎉 **Vamp's B'Day Bash Active:** RP **XP and GP are automatically doubled**. "
             "Reward and GP dips are disabled."
         )
-
     if nightmare_event_active():
         reward_rule += (
             "\n\n🎃 **Nightmare Before Critmas:** "
-            "Earn **1 🎃 per rewarded RP hour**, "
-            "up to **5 🎃 per day**."
+            "Earn **1 🎃 per rewarded RP hour**, up to **5 🎃 per Central day**."
         )
 
-    embed.add_field(
-        name="Reward Rule",
-        value=reward_rule,
-        inline=False
-    )
-
-    return apply_theme(
-        embed
-    )
+    embed.add_field(name="Reward Rule", value=reward_rule, inline=False)
+    return apply_theme(embed)
 
 
-def build_rp_status_announcement(
-    action: str,
-    actor: discord.abc.User,
-    message_id: int
-) -> discord.Embed:
-
-    (
-        state,
-        _,
-        _,
-        _,
-        _
-    ) = get_session(
-        message_id
-    )
-
-    elapsed = session_elapsed_seconds(
-        message_id
-    )
-
+def build_rp_status_announcement(action: str, actor: discord.abc.User, message_id: int) -> discord.Embed:
+    state, _, _, _, _ = get_session(message_id)
+    elapsed = session_elapsed_seconds(message_id)
     titles = {
         "start": "▶️ RP Session Started",
         "pause": "⏸ RP Session Paused",
         "resume": "⏵ RP Session Resumed",
         "end": "🏁 RP Session Ended",
     }
-
     descriptions = {
-        "start": (
-            "The Grandmaster has marked "
-            "this RP as officially underway."
-        ),
-        "pause": (
-            "The Grandmaster has temporarily "
-            "halted this RP."
-        ),
-        "resume": (
-            "The Grandmaster has declared "
-            "this RP active once more."
-        ),
-        "end": (
-            "The Grandmaster has formally "
-            "closed this RP session."
-        ),
+        "start": "The Grandmaster has marked this RP as officially underway.",
+        "pause": "The Grandmaster has temporarily halted this RP.",
+        "resume": "The Grandmaster has declared this RP active once more.",
+        "end": "The Grandmaster has formally closed this RP session.",
     }
-
     embed = discord.Embed(
-        title=titles.get(
-            action,
-            "📜 RP Session Update"
-        ),
-        description=descriptions.get(
-            action,
-            "The status of this RP has changed."
-        ),
-        color=theme_color()
+        title=titles.get(action, "📜 RP Session Update"),
+        description=descriptions.get(action, "The status of this RP has changed."),
+        color=theme_color(),
     )
-
-    embed.add_field(
-        name="Status",
-        value=state_label(
-            state
-        ),
-        inline=True
-    )
-
-    embed.add_field(
-        name="Session Time",
-        value=(
-            f"⏳ **"
-            f"{fmt_hm(elapsed)}"
-            f"**"
-        ),
-        inline=True
-    )
-
-    embed.add_field(
-        name="Filed By",
-        value=actor.mention,
-        inline=False
-    )
-
-    return apply_theme(
-        embed,
-        footer_text_override=(
-            "Filed in the Guild Ledger"
-        )
-    )
+    embed.add_field(name="Status", value=state_label(state), inline=True)
+    embed.add_field(name="Session Time", value=f"⏳ **{fmt_hm(elapsed)}**", inline=True)
+    embed.add_field(name="Filed By", value=actor.mention, inline=False)
+    return apply_theme(embed, footer_text_override="Filed in the Guild Ledger")
 
 
-async def post_rp_status_announcement(
-    channel,
-    action: str,
-    actor: discord.abc.User,
-    session_message_id: int
-):
+async def post_rp_status_announcement(channel, action: str, actor: discord.abc.User, session_message_id: int):
     try:
-        embed = build_rp_status_announcement(
-            action,
-            actor,
-            session_message_id
-        )
-
-        msg = await channel.send(
-            embed=embed
-        )
-
-        guild = getattr(
-            channel,
-            "guild",
-            None
-        )
-
-        channel_id = getattr(
-            channel,
-            "id",
-            None
-        )
-
-        guild_id = getattr(
-            guild,
-            "id",
-            None
-        )
-
-        if (
-            channel_id is not None
-            and guild_id is not None
-        ):
-            log_session_event(
-                session_message_id,
-                action,
-                msg.id,
-                channel_id,
-                guild_id
-            )
-
+        msg = await channel.send(embed=build_rp_status_announcement(action, actor, session_message_id))
+        guild = getattr(channel, "guild", None)
+        channel_id = getattr(channel, "id", None)
+        guild_id = getattr(guild, "id", None)
+        if channel_id is not None and guild_id is not None:
+            log_session_event(session_message_id, action, msg.id, channel_id, guild_id)
         return msg
-
     except Exception:
-        print(
-            "Failed to post RP status announcement",
-            flush=True
-        )
-
+        print("Failed to post RP status announcement", flush=True)
         traceback.print_exc()
-
         return None
 
 
-async def update_tracker_message(
-    message_id: int
-):
-    (
-        _,
-        _,
-        _,
-        channel_id,
-        _
-    ) = get_session(
-        message_id
-    )
-
+async def update_tracker_message(message_id: int):
+    _, _, _, channel_id, _ = get_session(message_id)
     if not channel_id:
         return
 
-    channel = bot.get_channel(
-        channel_id
-    )
-
+    channel = bot.get_channel(channel_id)
     if channel is None:
         try:
-            channel = await bot.fetch_channel(
-                channel_id
-            )
-
+            channel = await bot.fetch_channel(channel_id)
         except Exception:
             return
 
-    if (
-        isinstance(
-            channel,
-            discord.Thread
-        )
-        and channel.archived
-    ):
+    if isinstance(channel, discord.Thread) and channel.archived:
         return
 
     try:
-        msg = await channel.fetch_message(
-            message_id
-        )
-
+        msg = await channel.fetch_message(message_id)
     except Exception:
         return
 
-    view = RPView(
-        message_id
-    )
+    view = RPView(message_id)
 
     try:
-        await msg.edit(
-            embed=build_embed(
-                message_id
-            ),
-            view=view
-        )
-
-        bot.add_view(
-            view
-        )
-
+        await msg.edit(embed=build_embed(message_id), view=view)
+        bot.add_view(view)
     except discord.HTTPException as e:
-        if getattr(
-            e,
-            "code",
-            None
-        ) == 50083:
+        if getattr(e, "code", None) == 50083:
             return
-
-        if getattr(
-            e,
-            "status",
-            None
-        ) in (
-            502,
-            503,
-            504
-        ):
-            print(
-                (
-                    "Skipping temporary Discord API error "
-                    f"while updating tracker {message_id}: {e}"
-                ),
-                flush=True
-            )
+        if getattr(e, "status", None) in (502, 503, 504):
+            print(f"Skipping temporary Discord API error while updating tracker {message_id}: {e}", flush=True)
             return
-
         raise
-
     except discord.DiscordServerError as e:
-        print(
-            (
-                "Skipping temporary Discord server error "
-                f"while updating tracker {message_id}: {e}"
-            ),
-            flush=True
-        )
+        print(f"Skipping temporary Discord server error while updating tracker {message_id}: {e}", flush=True)
         return
-
     except Exception as e:
-        err_text = str(
-            e
-        ).lower()
-
+        err_text = str(e).lower()
         markers = (
             "connection reset by peer",
             "service unavailable",
@@ -2730,21 +948,9 @@ async def update_tracker_message(
             "remote connection failure",
             "overflow",
         )
-
-        if any(
-            marker in err_text
-            for marker
-            in markers
-        ):
-            print(
-                (
-                    "Skipping temporary network error "
-                    f"while updating tracker {message_id}: {e}"
-                ),
-                flush=True
-            )
+        if any(marker in err_text for marker in markers):
+            print(f"Skipping temporary network error while updating tracker {message_id}: {e}", flush=True)
             return
-
         raise
 
 
@@ -2753,430 +959,157 @@ async def update_tracker_message(
 # =========================
 def tick_running_sessions():
     now = time.time()
-
     with db() as conn:
         with conn.cursor() as cur:
-
-            cur.execute("""
-                SELECT message_id
-                FROM sessions
-                WHERE state=1
-            """)
-
-            running_ids = [
-                int(
-                    r[0]
-                )
-                for r
-                in cur.fetchall()
-            ]
-
-            for mid in running_ids:
-
+            cur.execute("SELECT message_id,guild_id FROM sessions WHERE state=1")
+            running = [(int(r[0]), int(r[1])) for r in cur.fetchall() if r[1] is not None]
+            for mid, guild_id in running:
                 cur.execute("""
-                    SELECT
-                        user_id,
-                        last_tick,
-                        seconds
-                    FROM participants
-                    WHERE
-                        message_id=%s
-                        AND present=1
-                        AND last_tick IS NOT NULL
-                        AND last_tick>=0
-                """, (
-                    mid,
-                ))
-
-                for (
-                    uid,
-                    last_tick,
-                    secs
-                ) in cur.fetchall():
-
-                    delta = max(
-                        0.0,
-                        now
-                        - float(
-                            last_tick
-                        )
+                    SELECT user_id,last_tick,seconds FROM participants
+                    WHERE message_id=%s AND present=1
+                      AND last_tick IS NOT NULL AND last_tick>=0
+                """, (mid,))
+                for uid, last_tick, secs in cur.fetchall():
+                    uid = int(uid)
+                    interval_start = float(last_tick)
+                    old_secs = float(secs or 0.0)
+                    delta = max(0.0, now - interval_start)
+                    new_secs = old_secs + delta
+                    process_critmas_thresholds(
+                        cur, guild_id, mid, uid, old_secs, new_secs, interval_start
                     )
-
                     cur.execute("""
-                        UPDATE participants
-                        SET
-                            seconds=%s,
-                            last_tick=%s
-                        WHERE
-                            message_id=%s
-                            AND user_id=%s
-                            AND present=1
-                    """, (
-                        float(
-                            secs
-                            or 0
-                        )
-                        + delta,
-                        now,
-                        mid,
-                        int(
-                            uid
-                        )
-                    ))
+                        UPDATE participants SET seconds=%s,last_tick=%s
+                        WHERE message_id=%s AND user_id=%s AND present=1
+                    """, (new_secs, now, mid, uid))
 
 
 async def ticker_loop():
     while True:
         try:
             tick_running_sessions()
-
             with db() as conn:
                 with conn.cursor() as cur:
-
-                    cur.execute("""
-                        SELECT message_id
-                        FROM sessions
-                        WHERE state=1
-                    """)
-
-                    mids = [
-                        int(
-                            r[0]
-                        )
-                        for r
-                        in cur.fetchall()
-                    ]
+                    cur.execute("SELECT message_id FROM sessions WHERE state=1")
+                    mids = [int(r[0]) for r in cur.fetchall()]
 
             for mid in mids:
                 try:
-                    await update_tracker_message(
-                        mid
-                    )
-
+                    await update_tracker_message(mid)
                 except Exception:
-                    print(
-                        (
-                            "Ticker update failed "
-                            f"for message_id={mid}"
-                        ),
-                        flush=True
-                    )
-
+                    print(f"Ticker update failed for message_id={mid}", flush=True)
                     traceback.print_exc()
-
         except Exception:
-            print(
-                "Ticker loop error:",
-                flush=True
-            )
-
+            print("Ticker loop error:", flush=True)
             traceback.print_exc()
 
-        await asyncio.sleep(
-            15
-        )
+        await asyncio.sleep(15)
 
 
 # =========================
 # JOIN MODAL
 # =========================
-class JoinModal(
-    discord.ui.Modal,
-    title="Adventurer Sign-In"
-):
-    name = discord.ui.TextInput(
-        label="Character Name",
-        max_length=64
-    )
-
-    level = discord.ui.TextInput(
-        label="Level (1-21)",
-        max_length=2,
-        placeholder="21 = Specialist"
-    )
-
-    capped = discord.ui.TextInput(
-        label="Capped? (yes/no)",
-        required=False,
-        max_length=5,
-        placeholder="no"
-    )
-
+class JoinModal(discord.ui.Modal, title="Adventurer Sign-In"):
+    name = discord.ui.TextInput(label="Character Name", max_length=64)
+    level = discord.ui.TextInput(label="Level (1-21)", max_length=2, placeholder="21 = Specialist")
+    capped = discord.ui.TextInput(label="Capped? (yes/no)", required=False, max_length=5, placeholder="no")
     xp_dip = discord.ui.TextInput(
-        label=(
-            "Reward DIP? "
-            "(no/dip/double dip)"
-        ),
-        required=False,
-        max_length=10,
-        placeholder="no"
+        label="Reward DIP? (no/dip/double dip)", required=False, max_length=10, placeholder="no"
     )
+    gp_dip = discord.ui.TextInput(label="GP DIP? (yes/no)", required=False, max_length=5, placeholder="no")
 
-    gp_dip = discord.ui.TextInput(
-        label="GP DIP? (yes/no)",
-        required=False,
-        max_length=5,
-        placeholder="no"
-    )
-
-    def __init__(
-        self,
-        message_id: int
-    ):
+    def __init__(self, message_id: int):
         super().__init__()
-
-        self.message_id = (
-            message_id
-        )
+        self.message_id = message_id
 
     @staticmethod
-    def _is_yes(
-        val: Optional[str]
-    ) -> int:
-
-        raw = (
-            str(
-                val
-            ).strip().lower()
-            if val
-            else "no"
-        )
-
-        return (
-            1
-            if raw in (
-                "y",
-                "yes",
-                "true",
-                "1",
-                "dip"
-            )
-            else 0
-        )
+    def _is_yes(val: Optional[str]) -> int:
+        raw = str(val).strip().lower() if val else "no"
+        return 1 if raw in ("y", "yes", "true", "1", "dip") else 0
 
     @staticmethod
-    def _parse_reward_dip(
-        val: Optional[str]
-    ) -> Optional[int]:
-
-        raw = (
-            str(
-                val
-            ).strip().lower()
-            if val
-            else "no"
-        )
-
-        if raw in (
-            "",
-            "n",
-            "no",
-            "none",
-            "false",
-            "0"
-        ):
+    def _parse_reward_dip(val: Optional[str]) -> Optional[int]:
+        raw = str(val).strip().lower() if val else "no"
+        if raw in ("", "n", "no", "none", "false", "0"):
             return 0
-
-        if raw in (
-            "y",
-            "yes",
-            "dip",
-            "single dip",
-            "1"
-        ):
+        if raw in ("y", "yes", "dip", "single dip", "1"):
             return 1
-
-        if raw in (
-            "double",
-            "double dip",
-            "doubledip",
-            "dd",
-            "2"
-        ):
+        if raw in ("double", "double dip", "doubledip", "dd", "2"):
             return 2
-
         return None
 
-    async def on_submit(
-        self,
-        interaction: discord.Interaction
-    ):
+    async def on_submit(self, interaction: discord.Interaction):
         try:
-            lvl = int(
-                str(
-                    self.level.value
-                ).strip()
-            )
-
+            lvl = int(str(self.level.value).strip())
             if not 1 <= lvl <= 21:
                 raise ValueError
-
         except ValueError:
             await interaction.response.send_message(
-                (
-                    "❌ Level must be a number "
-                    "from `1` to `21`.\n"
-                    "`21` represents a Specialist character."
-                ),
-                ephemeral=True
+                "❌ Level must be a number from `1` to `21`.\n`21` represents a Specialist character.",
+                ephemeral=True,
             )
             return
 
-        is_specialist = (
-            1
-            if lvl == 21
-            else 0
-        )
-
-        cname = str(
-            self.name.value
-        ).strip()
-
+        is_specialist = 1 if lvl == 21 else 0
+        cname = str(self.name.value).strip()
         if not cname:
-            await interaction.response.send_message(
-                "❌ Character name can’t be empty.",
-                ephemeral=True
-            )
+            await interaction.response.send_message("❌ Character name can’t be empty.", ephemeral=True)
             return
 
-        is_capped = self._is_yes(
-            self.capped.value
-        )
-
-        reward_dip = self._parse_reward_dip(
-            self.xp_dip.value
-        )
+        is_capped = self._is_yes(self.capped.value)
+        reward_dip = self._parse_reward_dip(self.xp_dip.value)
 
         if reward_dip is None:
             await interaction.response.send_message(
-                (
-                    "❌ Reward DIP must be "
-                    "`no`, `dip`, or `double dip`."
-                ),
-                ephemeral=True
+                "❌ Reward DIP must be `no`, `dip`, or `double dip`.", ephemeral=True
             )
             return
 
-        if (
-            not is_specialist
-            and reward_dip == 2
-        ):
+        if not is_specialist and reward_dip == 2:
             await interaction.response.send_message(
-                (
-                    "❌ Double DIP is only available "
-                    "to Specialist characters."
-                ),
-                ephemeral=True
+                "❌ Double DIP is only available to Specialist characters.", ephemeral=True
             )
             return
 
         if is_specialist:
             is_capped = 0
-
         if is_capped:
             reward_dip = 0
 
         if DOUBLE_RP_EVENT_ACTIVE:
             has_reward_dip = 0
             has_gp_dip = 0
-
         else:
-            has_reward_dip = (
-                reward_dip
-            )
-
-            has_gp_dip = self._is_yes(
-                self.gp_dip.value
-            )
+            has_reward_dip = reward_dip
+            has_gp_dip = self._is_yes(self.gp_dip.value)
 
         now = time.time()
-
-        (
-            state,
-            _,
-            _,
-            _,
-            _
-        ) = get_session(
-            self.message_id
-        )
+        state, _, _, _, _ = get_session(self.message_id)
 
         with db() as conn:
             with conn.cursor() as cur:
-
                 cur.execute("""
-                    SELECT
-                        COALESCE(
-                            seconds,
-                            0
-                        )
+                    SELECT COALESCE(seconds,0)
                     FROM participants
-                    WHERE
-                        message_id=%s
-                        AND user_id=%s
-                """, (
-                    self.message_id,
-                    interaction.user.id
-                ))
-
+                    WHERE message_id=%s AND user_id=%s
+                """, (self.message_id, interaction.user.id))
                 row = cur.fetchone()
-
-                prev_secs = (
-                    float(
-                        row[0]
-                    )
-                    if row
-                    else 0.0
-                )
+                prev_secs = float(row[0]) if row else 0.0
 
                 cur.execute("""
-                    INSERT INTO participants (
-                        message_id,
-                        user_id,
-                        character,
-                        level,
-                        seconds,
-                        last_tick,
-                        capped,
-                        xp_dip,
-                        gp_dip,
-                        specialist,
-                        present
-                    )
-                    VALUES (
-                        %s,
-                        %s,
-                        %s,
-                        %s,
-                        %s,
-                        %s,
-                        %s,
-                        %s,
-                        %s,
-                        %s,
-                        1
-                    )
-                    ON CONFLICT (
-                        message_id,
-                        user_id
-                    )
+                    INSERT INTO participants
+                    (message_id,user_id,character,level,seconds,last_tick,capped,xp_dip,gp_dip,specialist,present)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1)
+                    ON CONFLICT (message_id,user_id)
                     DO UPDATE SET
-                        character =
-                            EXCLUDED.character,
-                        level =
-                            EXCLUDED.level,
-                        seconds =
-                            EXCLUDED.seconds,
-                        last_tick =
-                            EXCLUDED.last_tick,
-                        capped =
-                            EXCLUDED.capped,
-                        xp_dip =
-                            EXCLUDED.xp_dip,
-                        gp_dip =
-                            EXCLUDED.gp_dip,
-                        specialist =
-                            EXCLUDED.specialist,
+                        character=EXCLUDED.character,
+                        level=EXCLUDED.level,
+                        seconds=EXCLUDED.seconds,
+                        last_tick=EXCLUDED.last_tick,
+                        capped=EXCLUDED.capped,
+                        xp_dip=EXCLUDED.xp_dip,
+                        gp_dip=EXCLUDED.gp_dip,
+                        specialist=EXCLUDED.specialist,
                         present=1
                 """, (
                     self.message_id,
@@ -3184,1782 +1117,668 @@ class JoinModal(
                     cname,
                     lvl,
                     prev_secs,
-                    (
-                        now
-                        if state == 1
-                        else None
-                    ),
+                    now if state == 1 else None,
                     is_capped,
                     has_reward_dip,
                     has_gp_dip,
-                    is_specialist
+                    is_specialist,
                 ))
 
         tags = []
-
         if is_specialist:
-            tags.append(
-                "Specialist"
-            )
-
+            tags.append("Specialist")
             if has_reward_dip == 1:
-                tags.append(
-                    "🪙 DIP"
-                )
-
+                tags.append("🪙 DIP")
             elif has_reward_dip == 2:
-                tags.append(
-                    "🪙 DOUBLE DIP"
-                )
-
+                tags.append("🪙 DOUBLE DIP")
         elif is_capped:
-            tags.append(
-                "Capped: 🗝️/hr"
-            )
-
+            tags.append("Capped: 🗝️/hr")
         elif has_reward_dip:
-            tags.append(
-                "XP DIP"
-            )
+            tags.append("XP DIP")
 
         if has_gp_dip:
-            tags.append(
-                "GP DIP"
-            )
+            tags.append("GP DIP")
 
-        tag_txt = (
-            f" *("
-            f"{', '.join(tags)}"
-            f")*"
-            if tags
-            else ""
-        )
-
-        display_level = (
-            "Specialist"
-            if is_specialist
-            else f"lvl {lvl}"
-        )
+        tag_txt = f" *({', '.join(tags)})*" if tags else ""
+        display_level = "Specialist" if is_specialist else f"lvl {lvl}"
 
         if DOUBLE_RP_EVENT_ACTIVE:
             msg = (
-                f"✅ Signed in: **{cname}** "
-                f"({display_level}){tag_txt}\n\n"
-                "🎉 **Vamp's B'Day Bash Active:** "
-                "RP **XP and GP are automatically doubled**.\n"
-                "Reward and GP dips are disabled "
-                "during the event."
+                f"✅ Signed in: **{cname}** ({display_level}){tag_txt}\n\n"
+                "🎉 **Vamp's B'Day Bash Active:** RP **XP and GP are automatically doubled**.\n"
+                "Reward and GP dips are disabled during the event."
             )
-
         else:
-            msg = (
-                f"✅ Signed in: **{cname}** "
-                f"({display_level}){tag_txt}"
-            )
+            msg = f"✅ Signed in: **{cname}** ({display_level}){tag_txt}"
 
-        await interaction.response.send_message(
-            msg,
-            ephemeral=True
-        )
-
-        await update_tracker_message(
-            self.message_id
-        )
+        await interaction.response.send_message(msg, ephemeral=True)
+        await update_tracker_message(self.message_id)
 
 
 # =========================
 # RP VIEW
 # =========================
-class EndConfirmModal(
-    discord.ui.Modal,
-    title="Confirm RP End"
-):
+class EndConfirmModal(discord.ui.Modal, title="Confirm RP End"):
     confirm = discord.ui.TextInput(
-        label=(
-            'Type "yes" to end '
-            "the RP for EVERYONE"
-        ),
+        label='Type "yes" to end the RP for EVERYONE',
         placeholder="yes",
-        max_length=10
+        max_length=10,
     )
 
-    def __init__(
-        self,
-        message_id: int
-    ):
+    def __init__(self, message_id: int):
         super().__init__()
+        self.message_id = message_id
 
-        self.message_id = (
-            message_id
-        )
-
-    async def on_submit(
-        self,
-        interaction: discord.Interaction
-    ):
-        if (
-            str(
-                self.confirm.value
-            ).strip().lower()
-            != "yes"
-        ):
+    async def on_submit(self, interaction: discord.Interaction):
+        if str(self.confirm.value).strip().lower() != "yes":
             await interaction.response.send_message(
-                (
-                    "❌ RP end cancelled. "
-                    "You must type `yes` exactly."
-                ),
-                ephemeral=True
+                "❌ RP end cancelled. You must type `yes` exactly.", ephemeral=True
             )
             return
-
-        await end_session_and_post_rewards(
-            interaction,
-            self.message_id
-        )
+        await end_session_and_post_rewards(interaction, self.message_id)
 
 
-class EndConfirmView(
-    discord.ui.View
-):
-    def __init__(
-        self,
-        message_id: int
-    ):
-        super().__init__(
-            timeout=60
-        )
+class EndConfirmView(discord.ui.View):
+    def __init__(self, message_id: int):
+        super().__init__(timeout=60)
+        self.message_id = message_id
 
-        self.message_id = (
-            message_id
-        )
-
-    @discord.ui.button(
-        label="Confirm End RP",
-        style=discord.ButtonStyle.danger
-    )
-    async def confirm_end(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
-    ):
-        await interaction.response.send_modal(
-            EndConfirmModal(
-                self.message_id
-            )
-        )
+    @discord.ui.button(label="Confirm End RP", style=discord.ButtonStyle.danger)
+    async def confirm_end(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(EndConfirmModal(self.message_id))
 
 
-class RPView(
-    discord.ui.View
-):
-    def __init__(
-        self,
-        message_id: int
-    ):
-        super().__init__(
-            timeout=None
-        )
+class RPView(discord.ui.View):
+    def __init__(self, message_id: int):
+        super().__init__(timeout=None)
+        self.message_id = message_id
 
-        self.message_id = (
-            message_id
-        )
+        self.join_btn = discord.ui.Button(label="✅ Join", style=discord.ButtonStyle.success, custom_id=f"rp_join:{message_id}", row=0)
+        self.leave_btn = discord.ui.Button(label="⏹ Leave", style=discord.ButtonStyle.secondary, custom_id=f"rp_leave:{message_id}", row=0)
+        self.rejoin_btn = discord.ui.Button(label="🔁 Rejoin", style=discord.ButtonStyle.secondary, custom_id=f"rp_rejoin:{message_id}", row=0)
+        self.start_btn = discord.ui.Button(label="▶️ Start", style=discord.ButtonStyle.primary, custom_id=f"rp_start:{message_id}", row=1)
+        self.pause_btn = discord.ui.Button(label="⏸ Pause", style=discord.ButtonStyle.secondary, custom_id=f"rp_pause:{message_id}", row=1)
+        self.resume_btn = discord.ui.Button(label="⏵ Resume", style=discord.ButtonStyle.success, custom_id=f"rp_resume:{message_id}", row=1)
+        self.end_btn = discord.ui.Button(label="🏁 End", style=discord.ButtonStyle.danger, custom_id=f"rp_end:{message_id}", row=2)
 
-        self.join_btn = discord.ui.Button(
-            label="✅ Join",
-            style=discord.ButtonStyle.success,
-            custom_id=(
-                f"rp_join:{message_id}"
-            ),
-            row=0
-        )
-
-        self.leave_btn = discord.ui.Button(
-            label="⏹ Leave",
-            style=discord.ButtonStyle.secondary,
-            custom_id=(
-                f"rp_leave:{message_id}"
-            ),
-            row=0
-        )
-
-        self.rejoin_btn = discord.ui.Button(
-            label="🔁 Rejoin",
-            style=discord.ButtonStyle.secondary,
-            custom_id=(
-                f"rp_rejoin:{message_id}"
-            ),
-            row=0
-        )
-
-        self.start_btn = discord.ui.Button(
-            label="▶️ Start",
-            style=discord.ButtonStyle.primary,
-            custom_id=(
-                f"rp_start:{message_id}"
-            ),
-            row=1
-        )
-
-        self.pause_btn = discord.ui.Button(
-            label="⏸ Pause",
-            style=discord.ButtonStyle.secondary,
-            custom_id=(
-                f"rp_pause:{message_id}"
-            ),
-            row=1
-        )
-
-        self.resume_btn = discord.ui.Button(
-            label="⏵ Resume",
-            style=discord.ButtonStyle.success,
-            custom_id=(
-                f"rp_resume:{message_id}"
-            ),
-            row=1
-        )
-
-        self.end_btn = discord.ui.Button(
-            label="🏁 End",
-            style=discord.ButtonStyle.danger,
-            custom_id=(
-                f"rp_end:{message_id}"
-            ),
-            row=2
-        )
-
-        self.join_btn.callback = (
-            self.join_cb
-        )
-
-        self.leave_btn.callback = (
-            self.leave_cb
-        )
-
-        self.rejoin_btn.callback = (
-            self.rejoin_cb
-        )
-
-        self.start_btn.callback = (
-            self.start_cb
-        )
-
-        self.pause_btn.callback = (
-            self.pause_cb
-        )
-
-        self.resume_btn.callback = (
-            self.resume_cb
-        )
-
-        self.end_btn.callback = (
-            self.end_cb
-        )
+        self.join_btn.callback = self.join_cb
+        self.leave_btn.callback = self.leave_cb
+        self.rejoin_btn.callback = self.rejoin_cb
+        self.start_btn.callback = self.start_cb
+        self.pause_btn.callback = self.pause_cb
+        self.resume_btn.callback = self.resume_cb
+        self.end_btn.callback = self.end_cb
 
         for button in (
-            self.join_btn,
-            self.leave_btn,
-            self.rejoin_btn,
-            self.start_btn,
-            self.pause_btn,
-            self.resume_btn,
-            self.end_btn,
+            self.join_btn, self.leave_btn, self.rejoin_btn,
+            self.start_btn, self.pause_btn, self.resume_btn, self.end_btn
         ):
-            self.add_item(
-                button
-            )
+            self.add_item(button)
 
-    async def join_cb(
-        self,
-        interaction: discord.Interaction
-    ):
-        await interaction.response.send_modal(
-            JoinModal(
-                self.message_id
-            )
-        )
+    async def join_cb(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(JoinModal(self.message_id))
 
-    async def leave_cb(
-        self,
-        interaction: discord.Interaction
-    ):
+    async def leave_cb(self, interaction: discord.Interaction):
         now = time.time()
-
         with db() as conn:
             with conn.cursor() as cur:
-
                 cur.execute("""
-                    SELECT
-                        last_tick,
-                        seconds
-                    FROM participants
-                    WHERE
-                        message_id=%s
-                        AND user_id=%s
-                """, (
-                    self.message_id,
-                    interaction.user.id
-                ))
-
+                    SELECT last_tick,seconds FROM participants
+                    WHERE message_id=%s AND user_id=%s
+                """, (self.message_id, interaction.user.id))
                 row = cur.fetchone()
-
                 if not row:
-                    await interaction.response.send_message(
-                        "You haven’t joined this RP yet.",
-                        ephemeral=True
-                    )
+                    await interaction.response.send_message("You haven’t joined this RP yet.", ephemeral=True)
                     return
 
-                last_tick = row[0]
-
-                secs = float(
-                    row[1]
-                    or 0.0
-                )
-
-                if (
-                    last_tick is not None
-                    and float(
-                        last_tick
-                    ) >= 0
-                ):
-                    secs += max(
-                        0.0,
-                        now
-                        - float(
-                            last_tick
-                        )
-                    )
+                last_tick, secs = row[0], float(row[1] or 0.0)
+                if last_tick is not None and float(last_tick) >= 0:
+                    secs += max(0.0, now - float(last_tick))
 
                 cur.execute("""
                     UPDATE participants
-                    SET
-                        seconds=%s,
-                        last_tick=NULL,
-                        present=0
-                    WHERE
-                        message_id=%s
-                        AND user_id=%s
-                """, (
-                    secs,
-                    self.message_id,
-                    interaction.user.id
-                ))
+                    SET seconds=%s,last_tick=NULL,present=0
+                    WHERE message_id=%s AND user_id=%s
+                """, (secs, self.message_id, interaction.user.id))
 
         await interaction.response.send_message(
-            (
-                "⏹ You’ve left. "
-                "Your personal RP timer is stopped."
-            ),
-            ephemeral=True
+            "⏹ You’ve left. Your personal RP timer is stopped.", ephemeral=True
         )
+        await update_tracker_message(self.message_id)
 
-        await update_tracker_message(
-            self.message_id
-        )
-
-    async def rejoin_cb(
-        self,
-        interaction: discord.Interaction
-    ):
-        (
-            state,
-            _,
-            _,
-            _,
-            _
-        ) = get_session(
-            self.message_id
-        )
-
+    async def rejoin_cb(self, interaction: discord.Interaction):
+        state, _, _, _, _ = get_session(self.message_id)
         with db() as conn:
             with conn.cursor() as cur:
-
                 cur.execute("""
-                    SELECT 1
-                    FROM participants
-                    WHERE
-                        message_id=%s
-                        AND user_id=%s
-                """, (
-                    self.message_id,
-                    interaction.user.id
-                ))
-
-                if (
-                    cur.fetchone()
-                    is None
-                ):
+                    SELECT 1 FROM participants
+                    WHERE message_id=%s AND user_id=%s
+                """, (self.message_id, interaction.user.id))
+                if cur.fetchone() is None:
                     await interaction.response.send_message(
-                        (
-                            "You haven’t joined yet. "
-                            "Click **✅ Join** first."
-                        ),
-                        ephemeral=True
+                        "You haven’t joined yet. Click **✅ Join** first.", ephemeral=True
                     )
                     return
 
                 if state != 1:
                     cur.execute("""
-                        UPDATE participants
-                        SET
-                            last_tick=NULL,
-                            present=1
-                        WHERE
-                            message_id=%s
-                            AND user_id=%s
-                    """, (
-                        self.message_id,
-                        interaction.user.id
-                    ))
-
+                        UPDATE participants SET last_tick=NULL,present=1
+                        WHERE message_id=%s AND user_id=%s
+                    """, (self.message_id, interaction.user.id))
                     await interaction.response.send_message(
-                        (
-                            "You’re marked present, "
-                            "but the session isn’t running."
-                        ),
-                        ephemeral=True
+                        "You’re marked present, but the session isn’t running.", ephemeral=True
                     )
-
-                    await update_tracker_message(
-                        self.message_id
-                    )
-
+                    await update_tracker_message(self.message_id)
                     return
 
                 cur.execute("""
-                    UPDATE participants
-                    SET
-                        last_tick=%s,
-                        present=1
-                    WHERE
-                        message_id=%s
-                        AND user_id=%s
-                """, (
-                    time.time(),
-                    self.message_id,
-                    interaction.user.id
-                ))
+                    UPDATE participants SET last_tick=%s,present=1
+                    WHERE message_id=%s AND user_id=%s
+                """, (time.time(), self.message_id, interaction.user.id))
 
         await interaction.response.send_message(
-            (
-                "🔁 You’re back in. "
-                "Your timer is running again."
-            ),
-            ephemeral=True
+            "🔁 You’re back in. Your timer is running again.", ephemeral=True
         )
+        await update_tracker_message(self.message_id)
 
-        await update_tracker_message(
-            self.message_id
-        )
-
-    async def start_cb(
-        self,
-        interaction: discord.Interaction
-    ):
-        (
-            state,
-            _,
-            run_seconds,
-            _,
-            _
-        ) = get_session(
-            self.message_id
-        )
-
+    async def start_cb(self, interaction: discord.Interaction):
+        state, _, run_seconds, _, _ = get_session(self.message_id)
         if state == 1:
-            await interaction.response.send_message(
-                "Already running.",
-                ephemeral=True
-            )
+            await interaction.response.send_message("Already running.", ephemeral=True)
             return
 
         now = time.time()
-
         with db() as conn:
             with conn.cursor() as cur:
-
                 cur.execute("""
-                    INSERT INTO sessions (
-                        message_id,
-                        state,
-                        started_at,
-                        run_seconds,
-                        channel_id,
-                        guild_id
-                    )
-                    VALUES (
-                        %s,
-                        0,
-                        NULL,
-                        0,
-                        %s,
-                        %s
-                    )
-                    ON CONFLICT (
-                        message_id
-                    )
-                    DO NOTHING
-                """, (
-                    self.message_id,
-                    interaction.channel_id,
-                    interaction.guild_id
-                ))
-
+                    INSERT INTO sessions
+                    (message_id,state,started_at,run_seconds,channel_id,guild_id)
+                    VALUES (%s,0,NULL,0,%s,%s)
+                    ON CONFLICT (message_id) DO NOTHING
+                """, (self.message_id, interaction.channel_id, interaction.guild_id))
                 cur.execute("""
                     UPDATE sessions
-                    SET
-                        state=1,
-                        started_at=%s,
-                        channel_id=%s,
-                        guild_id=%s,
-                        run_seconds=%s,
-                        ended_at=NULL
+                    SET state=1,started_at=%s,channel_id=%s,guild_id=%s,
+                        run_seconds=%s,ended_at=NULL
                     WHERE message_id=%s
                 """, (
                     now,
                     interaction.channel_id,
                     interaction.guild_id,
-                    float(
-                        run_seconds
-                        or 0.0
-                    ),
-                    self.message_id
+                    float(run_seconds or 0.0),
+                    self.message_id,
                 ))
-
                 cur.execute("""
-                    UPDATE participants
-                    SET last_tick=%s
-                    WHERE
-                        message_id=%s
-                        AND present=1
-                """, (
-                    now,
-                    self.message_id
-                ))
+                    UPDATE participants SET last_tick=%s
+                    WHERE message_id=%s AND present=1
+                """, (now, self.message_id))
 
         await interaction.response.send_message(
-            (
-                "▶️ Session started. "
-                "The guild clock is running."
-            ),
-            ephemeral=True
+            "▶️ Session started. The guild clock is running.", ephemeral=True
         )
-
         if interaction.channel is not None:
             await post_rp_status_announcement(
-                interaction.channel,
-                "start",
-                interaction.user,
-                self.message_id
+                interaction.channel, "start", interaction.user, self.message_id
             )
+        await update_tracker_message(self.message_id)
 
-        await update_tracker_message(
-            self.message_id
-        )
-
-    async def pause_cb(
-        self,
-        interaction: discord.Interaction
-    ):
-        (
-            state,
-            started_at,
-            run_seconds,
-            _,
-            _
-        ) = get_session(
-            self.message_id
-        )
-
-        if (
-            state != 1
-            or started_at is None
-        ):
-            await interaction.response.send_message(
-                "Not currently running.",
-                ephemeral=True
-            )
+    async def pause_cb(self, interaction: discord.Interaction):
+        state, started_at, run_seconds, _, _ = get_session(self.message_id)
+        if state != 1 or started_at is None:
+            await interaction.response.send_message("Not currently running.", ephemeral=True)
             return
 
         tick_running_sessions()
-
         now = time.time()
-
-        new_run = (
-            float(
-                run_seconds
-                or 0.0
-            )
-            + max(
-                0.0,
-                now
-                - started_at
-            )
-        )
+        new_run = float(run_seconds or 0.0) + max(0.0, now - started_at)
 
         with db() as conn:
             with conn.cursor() as cur:
-
                 cur.execute("""
                     UPDATE sessions
-                    SET
-                        state=2,
-                        started_at=NULL,
-                        run_seconds=%s
+                    SET state=2,started_at=NULL,run_seconds=%s
                     WHERE message_id=%s
-                """, (
-                    new_run,
-                    self.message_id
-                ))
-
+                """, (new_run, self.message_id))
                 cur.execute("""
-                    UPDATE participants
-                    SET last_tick=-1
-                    WHERE
-                        message_id=%s
-                        AND present=1
-                        AND last_tick IS NOT NULL
-                """, (
-                    self.message_id,
-                ))
+                    UPDATE participants SET last_tick=-1
+                    WHERE message_id=%s AND present=1 AND last_tick IS NOT NULL
+                """, (self.message_id,))
 
-        await interaction.response.send_message(
-            "⏸ Session paused. Quills down.",
-            ephemeral=True
-        )
-
+        await interaction.response.send_message("⏸ Session paused. Quills down.", ephemeral=True)
         if interaction.channel is not None:
             await post_rp_status_announcement(
-                interaction.channel,
-                "pause",
-                interaction.user,
-                self.message_id
+                interaction.channel, "pause", interaction.user, self.message_id
             )
+        await update_tracker_message(self.message_id)
 
-        await update_tracker_message(
-            self.message_id
-        )
-
-    async def resume_cb(
-        self,
-        interaction: discord.Interaction
-    ):
-        (
-            state,
-            _,
-            run_seconds,
-            _,
-            _
-        ) = get_session(
-            self.message_id
-        )
-
+    async def resume_cb(self, interaction: discord.Interaction):
+        state, _, run_seconds, _, _ = get_session(self.message_id)
         if state != 2:
-            await interaction.response.send_message(
-                "Not currently paused.",
-                ephemeral=True
-            )
+            await interaction.response.send_message("Not currently paused.", ephemeral=True)
             return
 
         now = time.time()
-
         with db() as conn:
             with conn.cursor() as cur:
-
                 cur.execute("""
                     UPDATE sessions
-                    SET
-                        state=1,
-                        started_at=%s,
-                        run_seconds=%s
+                    SET state=1,started_at=%s,run_seconds=%s
                     WHERE message_id=%s
-                """, (
-                    now,
-                    float(
-                        run_seconds
-                        or 0.0
-                    ),
-                    self.message_id
-                ))
-
+                """, (now, float(run_seconds or 0.0), self.message_id))
                 cur.execute("""
-                    UPDATE participants
-                    SET last_tick=%s
-                    WHERE
-                        message_id=%s
-                        AND present=1
-                        AND last_tick=-1
-                """, (
-                    now,
-                    self.message_id
-                ))
+                    UPDATE participants SET last_tick=%s
+                    WHERE message_id=%s AND present=1 AND last_tick=-1
+                """, (now, self.message_id))
 
         await interaction.response.send_message(
-            (
-                "⏵ Session resumed. "
-                "The guild clock continues."
-            ),
-            ephemeral=True
+            "⏵ Session resumed. The guild clock continues.", ephemeral=True
         )
-
         if interaction.channel is not None:
             await post_rp_status_announcement(
-                interaction.channel,
-                "resume",
-                interaction.user,
-                self.message_id
+                interaction.channel, "resume", interaction.user, self.message_id
             )
+        await update_tracker_message(self.message_id)
 
-        await update_tracker_message(
-            self.message_id
-        )
-
-    async def end_cb(
-        self,
-        interaction: discord.Interaction
-    ):
+    async def end_cb(self, interaction: discord.Interaction):
         embed = discord.Embed(
             title="⚠️ End RP Confirmation",
             description=(
-                "**Are you sure you want to end "
-                "the RP for EVERYONE?**\n\n"
-                "This will close the ledger "
-                "and generate rewards.\n"
-                "Click the button below, then "
-                "type `yes` to confirm."
+                "**Are you sure you want to end the RP for EVERYONE?**\n\n"
+                "This will close the ledger and generate rewards.\n"
+                "Click the button below, then type `yes` to confirm."
             ),
-            color=discord.Color.red()
+            color=discord.Color.red(),
         )
-
         await interaction.response.send_message(
             embed=embed,
-            view=EndConfirmView(
-                self.message_id
-            ),
-            ephemeral=True
+            view=EndConfirmView(self.message_id),
+            ephemeral=True,
         )
 
 
 # =========================
 # END SESSION CORE
 # =========================
-async def end_session_and_post_rewards(
-    interaction: discord.Interaction,
-    message_id: int
-):
+async def end_session_and_post_rewards(interaction: discord.Interaction, message_id: int):
     if not interaction.response.is_done():
-        await interaction.response.defer(
-            thinking=False
-        )
+        await interaction.response.defer(thinking=False)
 
-    (
-        state,
-        started_at,
-        run_seconds,
-        channel_id,
-        guild_id
-    ) = get_session(
-        message_id
-    )
+    state, started_at, run_seconds, channel_id, guild_id = get_session(message_id)
 
-    if (
-        not channel_id
-        or not guild_id
-    ):
+    if not channel_id or not guild_id:
         try:
             await interaction.followup.send(
-                (
-                    "❌ Could not locate this "
-                    "session in the ledger."
-                ),
-                ephemeral=True
+                "❌ Could not locate this session in the ledger.", ephemeral=True
             )
-
         except Exception:
             pass
-
         return
 
-    if (
-        state == 1
-        and started_at is not None
-    ):
+    if state == 1 and started_at is not None:
         tick_running_sessions()
-
         now = time.time()
-
-        run_seconds = (
-            float(
-                run_seconds
-                or 0.0
-            )
-            + max(
-                0.0,
-                now
-                - started_at
-            )
-        )
+        run_seconds = float(run_seconds or 0.0) + max(0.0, now - started_at)
 
     ended_at = time.time()
 
     with db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
                 UPDATE sessions
-                SET
-                    state=0,
-                    started_at=NULL,
-                    run_seconds=%s,
-                    ended_at=%s
+                SET state=0,started_at=NULL,run_seconds=%s,ended_at=%s
                 WHERE message_id=%s
-            """, (
-                float(
-                    run_seconds
-                    or 0.0
-                ),
-                ended_at,
-                message_id
-            ))
-
-            cur.execute("""
-                UPDATE participants
-                SET last_tick=NULL
-                WHERE message_id=%s
-            """, (
-                message_id,
-            ))
+            """, (float(run_seconds or 0.0), ended_at, message_id))
+            cur.execute("UPDATE participants SET last_tick=NULL WHERE message_id=%s", (message_id,))
 
     if interaction.channel is not None:
         await post_rp_status_announcement(
-            interaction.channel,
-            "end",
-            interaction.user,
-            message_id
+            interaction.channel, "end", interaction.user, message_id
         )
 
-    parts = list_participants(
-        message_id
-    )
-
+    parts = list_participants(message_id)
     lines = []
 
-    event_active = (
-        nightmare_event_active()
-    )
-
-    for (
-        uid,
-        char,
-        lvl,
-        secs,
-        cap,
-        reward_dip,
-        gp_dip,
-        specialist
-    ) in parts:
-
-        hrs = reward_hours(
-            secs
-        )
-
+    for uid, char, lvl, secs, cap, reward_dip, gp_dip, specialist in parts:
+        hrs = reward_hours(secs)
+        awarded_pumpkins, blocked_pumpkins = critmas_session_result(message_id, uid)
         pumpkin_suffix = ""
-
-        if (
-            event_active
-            and hrs > 0
-        ):
-            awarded_pumpkins = 0
-            blocked_pumpkins = 0
-
-            if event_active and hrs > 0:
-                awarded_pumpkins, blocked_pumpkins = (
-                    critmas_add_rp_pumpkins(
-                        guild_id,
-                        uid,
-                        rp_started_at,
-                        secs
-                    )
-                )
-
-            pumpkin_suffix = (
-                f", **{awarded_pumpkins}** 🎃"
-            )
-
-            if (
-                awarded_pumpkins
-                < requested_pumpkins
-            ):
-                pumpkin_suffix += (
-                    " *(5 🎃 daily cap)*"
-                )
+        if awarded_pumpkins or blocked_pumpkins:
+            pumpkin_suffix = f", **{awarded_pumpkins}** 🎃"
+            if blocked_pumpkins:
+                pumpkin_suffix += " *(daily cap reached)*"
 
         if specialist:
-
-            coin_rate = {
-                0: 2,
-                1: 4,
-                2: 6,
-            }.get(
-                reward_dip,
-                SPECIALIST_RP_COINS_PER_HOUR
+            coin_rate = {0: 2, 1: 4, 2: 6}.get(
+                reward_dip, SPECIALIST_RP_COINS_PER_HOUR
             )
-
-            coins = (
-                coin_rate
-                * hrs
-            )
-
-            gp = (
-                SPECIALIST_RP_GP_PER_HOUR
-                * hrs
-            )
+            coins = coin_rate * hrs
+            gp = SPECIALIST_RP_GP_PER_HOUR * hrs
 
             if DOUBLE_RP_EVENT_ACTIVE:
                 gp *= 2
-
             elif gp_dip:
                 gp *= 2
 
-            special_add(
-                guild_id,
-                uid,
-                coins
-            )
+            special_add(guild_id, uid, coins)
 
             tags = []
-
             if reward_dip == 1:
-                tags.append(
-                    "🪙 DIP"
-                )
-
+                tags.append("🪙 DIP")
             elif reward_dip == 2:
-                tags.append(
-                    "🪙 DOUBLE DIP"
-                )
-
-            if (
-                not DOUBLE_RP_EVENT_ACTIVE
-                and gp_dip
-            ):
-                tags.append(
-                    "GP×2"
-                )
-
-            tag_text = (
-                f" *("
-                f"{', '.join(tags)}"
-                f")*"
-                if tags
-                else ""
-            )
+                tags.append("🪙 DOUBLE DIP")
+            if not DOUBLE_RP_EVENT_ACTIVE and gp_dip:
+                tags.append("GP×2")
+            tag_text = f" *({', '.join(tags)})*" if tags else ""
 
             lines.append(
-                f"<@{uid}> — "
-                f"**{char}** "
-                f"(Specialist) — "
-                f"**{hrs}h** — "
-                f"**{coins}** 🪙, "
-                f"**{gp}** gp"
-                f"{pumpkin_suffix}"
-                f"{tag_text}"
+                f"<@{uid}> — **{char}** (Specialist) — "
+                f"**{hrs}h** — **{coins}** 🪙, **{gp}** gp{pumpkin_suffix}{tag_text}"
             )
 
         else:
-            gp = (
-                gp_per_hour_for_level(
-                    lvl
-                )
-                * hrs
-            )
-
+            gp = gp_per_hour_for_level(lvl) * hrs
             if DOUBLE_RP_EVENT_ACTIVE:
                 gp *= 2
-
             elif gp_dip:
                 gp *= 2
 
             tags = []
-
             if not DOUBLE_RP_EVENT_ACTIVE:
                 if reward_dip:
-                    tags.append(
-                        "XP×2"
-                    )
-
+                    tags.append("XP×2")
                 if gp_dip:
-                    tags.append(
-                        "GP×2"
-                    )
+                    tags.append("GP×2")
+            dip_txt = f" *({', '.join(tags)})*" if tags else ""
 
-            dip_txt = (
-                f" *("
-                f"{', '.join(tags)}"
-                f")*"
-                if tags
-                else ""
-            )
-
-            if (
-                lvl >= 20
-                or cap
-            ):
+            if lvl >= 20 or cap:
                 keys = hrs
-
-                keys_add(
-                    guild_id,
-                    uid,
-                    keys
-                )
-
+                keys_add(guild_id, uid, keys)
                 lines.append(
-                    f"<@{uid}> — "
-                    f"**{char}** "
-                    f"(lvl {lvl}) — "
-                    f"**{hrs}h** — "
-                    f"**{keys}** 🗝️, "
-                    f"**{gp}** gp"
-                    f"{pumpkin_suffix}"
-                    f"{dip_txt}"
+                    f"<@{uid}> — **{char}** (lvl {lvl}) — "
+                    f"**{hrs}h** — **{keys}** 🗝️, **{gp}** gp{pumpkin_suffix}{dip_txt}"
                 )
-
             else:
-                xp = (
-                    xp_per_hour_for_level(
-                        lvl
-                    )
-                    * hrs
-                )
-
+                xp = xp_per_hour_for_level(lvl) * hrs
                 if DOUBLE_RP_EVENT_ACTIVE:
                     xp *= 2
-
                 elif reward_dip:
                     xp *= 2
-
                 lines.append(
-                    f"<@{uid}> — "
-                    f"**{char}** "
-                    f"(lvl {lvl}) — "
-                    f"**{hrs}h** — "
-                    f"**{xp}** xp, "
-                    f"**{gp}** gp"
-                    f"{pumpkin_suffix}"
-                    f"{dip_txt}"
+                    f"<@{uid}> — **{char}** (lvl {lvl}) — "
+                    f"**{hrs}h** — **{xp}** xp, **{gp}** gp{pumpkin_suffix}{dip_txt}"
                 )
 
         if hrs > 0:
             try:
-                guild = (
-                    interaction.guild
-                )
-
+                guild = interaction.guild
                 if guild is not None:
-                    member = guild.get_member(
-                        uid
-                    )
-
+                    member = guild.get_member(uid)
                     if member is None:
-                        member = await guild.fetch_member(
-                            uid
-                        )
-
+                        member = await guild.fetch_member(uid)
                     fresh_role = discord.utils.get(
                         guild.roles,
-                        name=FRESH_ADVENTURER_ROLE_NAME
+                        name=FRESH_ADVENTURER_ROLE_NAME,
                     )
-
-                    if (
-                        member is not None
-                        and fresh_role is not None
-                        and fresh_role
-                        in member.roles
-                    ):
+                    if member is not None and fresh_role is not None and fresh_role in member.roles:
                         await member.remove_roles(
                             fresh_role,
-                            reason=(
-                                "Completed first RP session"
-                            )
+                            reason="Completed first RP session",
                         )
-
             except Exception:
                 traceback.print_exc()
 
     if not lines:
-        lines = [
-            "*(no participants)*"
-        ]
+        lines = ["*(no participants)*"]
 
-    start_link = tracker_url(
-        guild_id,
-        channel_id,
-        message_id
-    )
-
+    start_link = tracker_url(guild_id, channel_id, message_id)
     end_link = None
-
-    mid_links: List[
-        str
-    ] = []
+    mid_links: List[str] = []
 
     try:
-        for (
-            event_type,
-            event_message_id,
-            ev_channel_id,
-            ev_guild_id
-        ) in get_session_events(
-            message_id
-        ):
-
-            jump = build_jump_link(
-                ev_guild_id,
-                ev_channel_id,
-                event_message_id
-            )
-
+        for event_type, event_message_id, ev_channel_id, ev_guild_id in get_session_events(message_id):
+            jump = build_jump_link(ev_guild_id, ev_channel_id, event_message_id)
             if event_type == "start":
                 start_link = jump
-
             elif event_type == "pause":
-                mid_links.append(
-                    f"Pause: {jump}"
-                )
-
+                mid_links.append(f"Pause: {jump}")
             elif event_type == "resume":
-                mid_links.append(
-                    f"Resume: {jump}"
-                )
-
+                mid_links.append(f"Resume: {jump}")
             elif event_type == "end":
                 end_link = jump
-
     except Exception:
         traceback.print_exc()
 
     if end_link is None:
-        end_link = tracker_url(
-            guild_id,
-            channel_id,
-            message_id
-        )
+        end_link = tracker_url(guild_id, channel_id, message_id)
 
-    record_links = (
-        "\n\n"
-        + "\n".join(
-            [
-                f"Start: {start_link}",
-                *mid_links,
-                f"End: {end_link}"
-            ]
-        )
+    record_links = "\n\n" + "\n".join(
+        [f"Start: {start_link}", *mid_links, f"End: {end_link}"]
     )
 
     first_header = (
         "🏁 **Guild Ledger Closed — Rewards Issued**\n"
-        "The registrar tallies the earnings "
-        "and stamps the record.\n"
+        "The registrar tallies the earnings and stamps the record.\n"
     )
+    continuation_header = "🏁 **Guild Ledger Closed — Rewards Continued**\n"
 
-    continuation_header = (
-        "🏁 **Guild Ledger Closed — Rewards Continued**\n"
-    )
-
-    reward_chunks: List[
-        str
-    ] = []
-
-    current = (
-        first_header
-    )
+    reward_chunks: List[str] = []
+    current = first_header
 
     for line in lines:
-        addition = (
-            "\n"
-            + line
-        )
-
-        if (
-            len(current)
-            + len(addition)
-            + len(record_links)
-            > 1900
-        ):
-            reward_chunks.append(
-                current
-                + record_links
-            )
-
-            current = (
-                continuation_header
-                + "\n"
-                + line
-            )
-
+        addition = "\n" + line
+        if len(current) + len(addition) + len(record_links) > 1900:
+            reward_chunks.append(current + record_links)
+            current = continuation_header + "\n" + line
         else:
             current += addition
 
     if current:
-        reward_chunks.append(
-            current
-            + record_links
-        )
+        reward_chunks.append(current + record_links)
 
     for chunk in reward_chunks:
-        await interaction.followup.send(
-            chunk,
-            wait=True
-        )
+        await interaction.followup.send(chunk, wait=True)
 
-    await update_tracker_message(
-        message_id
-    )
+    await update_tracker_message(message_id)
 
 
 # =========================
 # SLASH COMMANDS
 # =========================
-@bot.tree.command(
-    name="rpbegin",
-    description=(
-        "Post and pin the "
-        "Adventurer’s Guild RP tracker."
-    )
-)
-async def rpbegin(
-    interaction: discord.Interaction
-):
-    await interaction.response.defer(
-        thinking=False
-    )
+@bot.tree.command(name="rpbegin", description="Post and pin the Adventurer’s Guild RP tracker.")
+async def rpbegin(interaction: discord.Interaction):
+    await interaction.response.defer(thinking=False)
 
     temp = apply_theme(
         discord.Embed(
-            title=(
-                "📜 Opening a new "
-                "Guild Ledger…"
-            ),
-            description=(
-                "Preparing the session log."
-            )
+            title="📜 Opening a new Guild Ledger…",
+            description="Preparing the session log.",
         )
     )
-
-    msg = await interaction.followup.send(
-        embed=temp,
-        wait=True
-    )
+    msg = await interaction.followup.send(embed=temp, wait=True)
 
     with db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
-                INSERT INTO sessions (
-                    message_id,
-                    state,
-                    started_at,
-                    run_seconds,
-                    channel_id,
-                    guild_id
-                )
-                VALUES (
-                    %s,
-                    0,
-                    NULL,
-                    0,
-                    %s,
-                    %s
-                )
-                ON CONFLICT (
-                    message_id
-                )
-                DO NOTHING
-            """, (
-                msg.id,
-                msg.channel.id,
-                interaction.guild_id
-            ))
-
+                INSERT INTO sessions
+                (message_id,state,started_at,run_seconds,channel_id,guild_id)
+                VALUES (%s,0,NULL,0,%s,%s)
+                ON CONFLICT (message_id) DO NOTHING
+            """, (msg.id, msg.channel.id, interaction.guild_id))
             cur.execute("""
-                UPDATE sessions
-                SET
-                    channel_id=%s,
-                    guild_id=%s
-                WHERE message_id=%s
-            """, (
-                msg.channel.id,
-                interaction.guild_id,
-                msg.id
-            ))
+                UPDATE sessions SET channel_id=%s,guild_id=%s WHERE message_id=%s
+            """, (msg.channel.id, interaction.guild_id, msg.id))
 
-    view = RPView(
-        msg.id
-    )
-
-    await msg.edit(
-        embed=build_embed(
-            msg.id
-        ),
-        view=view
-    )
-
-    bot.add_view(
-        view
-    )
+    view = RPView(msg.id)
+    await msg.edit(embed=build_embed(msg.id), view=view)
+    bot.add_view(view)
 
     try:
-        await msg.pin(
-            reason=(
-                "Adventurer’s Guild "
-                "RP Tracker"
-            )
-        )
-
+        await msg.pin(reason="Adventurer’s Guild RP Tracker")
     except Exception:
         pass
 
 
-@bot.tree.command(
-    name="rpend",
-    description=(
-        "End the active RP session "
-        "in this channel/thread."
-    )
-)
-async def rpend(
-    interaction: discord.Interaction
-):
-    await interaction.response.defer(
-        thinking=False
-    )
-
+@bot.tree.command(name="rpend", description="End the active RP session in this channel/thread.")
+async def rpend(interaction: discord.Interaction):
+    await interaction.response.defer(thinking=False)
     with db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
                 SELECT message_id
                 FROM sessions
-                WHERE
-                    channel_id=%s
-                    AND guild_id=%s
-                    AND state IN (
-                        1,
-                        2
-                    )
+                WHERE channel_id=%s AND guild_id=%s AND state IN (1,2)
                 ORDER BY message_id DESC
                 LIMIT 1
-            """, (
-                interaction.channel_id,
-                interaction.guild_id
-            ))
-
+            """, (interaction.channel_id, interaction.guild_id))
             row = cur.fetchone()
 
     if not row:
         await interaction.followup.send(
-            (
-                "❌ No active tracker found "
-                "in this channel."
-            ),
-            ephemeral=True
+            "❌ No active tracker found in this channel.", ephemeral=True
         )
         return
 
-    await end_session_and_post_rewards(
-        interaction,
-        int(
-            row[0]
-        )
-    )
+    await end_session_and_post_rewards(interaction, int(row[0]))
 
 
 # =========================
 # PREFIX COMMANDS
 # =========================
-@bot.command(
-    name="key"
-)
-async def key_cmd(
-    ctx: commands.Context,
-    amount: Optional[str] = None,
-    *,
-    reason: Optional[str] = None
-):
+@bot.command(name="key")
+async def key_cmd(ctx: commands.Context, amount: Optional[str] = None, *, reason: Optional[str] = None):
     if ctx.guild is None:
-        await ctx.send(
-            "❌ This command can only be used in a server."
-        )
+        await ctx.send("❌ This command can only be used in a server.")
         return
 
     if amount is None:
-        (
-            current,
-            lifetime
-        ) = keys_get(
-            ctx.guild.id,
-            ctx.author.id
-        )
-
-        await ctx.send(
-            embed=build_key_embed(
-                ctx.author,
-                current,
-                lifetime
-            )
-        )
+        current, lifetime = keys_get(ctx.guild.id, ctx.author.id)
+        await ctx.send(embed=build_key_embed(ctx.author, current, lifetime))
         return
 
     try:
-        delta = int(
-            amount.strip()
-        )
-
+        delta = int(amount.strip())
     except Exception:
-        await ctx.send(
-            'Usage: `!key` or '
-            '`!key +3 "Reason"` or '
-            '`!key -2 "Reason"`'
-        )
+        await ctx.send('Usage: `!key` or `!key +3 "Reason"` or `!key -2 "Reason"`')
         return
 
     if delta == 0:
-        await ctx.send(
-            "That would change nothing. 🙂"
-        )
+        await ctx.send("That would change nothing. 🙂")
         return
 
     if delta > 0:
-        keys_add(
-            ctx.guild.id,
-            ctx.author.id,
-            delta
-        )
-
+        keys_add(ctx.guild.id, ctx.author.id, delta)
     else:
-        keys_sub(
-            ctx.guild.id,
-            ctx.author.id,
-            abs(
-                delta
-            )
-        )
+        keys_sub(ctx.guild.id, ctx.author.id, abs(delta))
 
-    (
-        current,
-        lifetime
-    ) = keys_get(
-        ctx.guild.id,
-        ctx.author.id
-    )
-
-    reason_text = (
-        reason
-        if reason
-        else "*No reason provided.*"
-    )
+    current, lifetime = keys_get(ctx.guild.id, ctx.author.id)
+    reason_text = reason if reason else "*No reason provided.*"
 
     await ctx.send(
-        (
-            f"Name: {ctx.author.mention}\n"
-            f"Keys Earned: "
-            f"{delta:+d} 🗝️\n"
-            f"For: {reason_text}"
-        )
+        f"Name: {ctx.author.mention}\n"
+        f"Keys Earned: {delta:+d} 🗝️\n"
+        f"For: {reason_text}"
     )
-
-    await ctx.send(
-        embed=build_key_embed(
-            ctx.author,
-            current,
-            lifetime
-        )
-    )
+    await ctx.send(embed=build_key_embed(ctx.author, current, lifetime))
 
 
-@bot.command(
-    name="special"
-)
-async def special_cmd(
-    ctx: commands.Context,
-    amount: Optional[str] = None,
-    *,
-    reason: Optional[str] = None
-):
+@bot.command(name="special")
+async def special_cmd(ctx: commands.Context, amount: Optional[str] = None, *, reason: Optional[str] = None):
     if ctx.guild is None:
-        await ctx.send(
-            "❌ This command can only be used in a server."
-        )
+        await ctx.send("❌ This command can only be used in a server.")
         return
 
     if amount is None:
-        (
-            current,
-            lifetime
-        ) = special_get(
-            ctx.guild.id,
-            ctx.author.id
-        )
-
-        await ctx.send(
-            embed=build_special_embed(
-                ctx.author,
-                current,
-                lifetime
-            )
-        )
+        current, lifetime = special_get(ctx.guild.id, ctx.author.id)
+        await ctx.send(embed=build_special_embed(ctx.author, current, lifetime))
         return
 
     try:
-        delta = int(
-            amount.strip()
-        )
-
+        delta = int(amount.strip())
     except Exception:
-        await ctx.send(
-            'Usage: `!special` or '
-            '`!special +3 "Reason"` or '
-            '`!special -2 "Reason"`'
-        )
+        await ctx.send('Usage: `!special` or `!special +3 "Reason"` or `!special -2 "Reason"`')
         return
 
     if delta == 0:
-        await ctx.send(
-            "That would change nothing. 🙂"
-        )
+        await ctx.send("That would change nothing. 🙂")
         return
 
     if delta > 0:
-        special_add(
-            ctx.guild.id,
-            ctx.author.id,
-            delta
-        )
-
+        special_add(ctx.guild.id, ctx.author.id, delta)
     else:
-        special_sub(
-            ctx.guild.id,
-            ctx.author.id,
-            abs(
-                delta
-            )
-        )
+        special_sub(ctx.guild.id, ctx.author.id, abs(delta))
 
-    (
-        current,
-        lifetime
-    ) = special_get(
-        ctx.guild.id,
-        ctx.author.id
-    )
-
-    reason_text = (
-        reason
-        if reason
-        else "*No reason provided.*"
-    )
+    current, lifetime = special_get(ctx.guild.id, ctx.author.id)
+    reason_text = reason if reason else "*No reason provided.*"
 
     await ctx.send(
-        (
-            f"Name: {ctx.author.mention}\n"
-            f"Specialist Coins: "
-            f"{delta:+d} 🪙\n"
-            f"For: {reason_text}"
-        )
+        f"Name: {ctx.author.mention}\n"
+        f"Specialist Coins: {delta:+d} 🪙\n"
+        f"For: {reason_text}"
     )
-
-    await ctx.send(
-        embed=build_special_embed(
-            ctx.author,
-            current,
-            lifetime
-        )
-    )
+    await ctx.send(embed=build_special_embed(ctx.author, current, lifetime))
 
 
-@bot.command(
-    name="loot"
-)
-async def loot_cmd(
-    ctx: commands.Context,
-    *,
-    item_name: Optional[str] = None
-):
+@bot.command(name="loot")
+async def loot_cmd(ctx: commands.Context, *, item_name: Optional[str] = None):
     if ctx.guild is None:
-        await ctx.send(
-            "❌ This command can only be used in a server."
-        )
+        await ctx.send("❌ This command can only be used in a server.")
         return
-
     if not item_name:
-        await ctx.send(
-            (
-                "❌ Usage: `!loot Item Name`\n"
-                "Example: `!loot Flame Tongue`"
-            )
-        )
+        await ctx.send("❌ Usage: `!loot Item Name`\nExample: `!loot Flame Tongue`")
         return
 
-    query = " ".join(
-        item_name
-        .strip()
-        .lower()
-        .split()
-    )
-
+    query = " ".join(item_name.strip().lower().split())
     exact_matches = [
-        item
-        for item
-        in LOOT_DETAILS
-        if " ".join(
-            item["name"]
-            .lower()
-            .split()
-        ) == query
+        item for item in LOOT_DETAILS
+        if " ".join(item["name"].lower().split()) == query
     ]
 
-    if len(
-        exact_matches
-    ) == 1:
-
-        item = (
-            exact_matches[0]
-        )
-
-    elif len(
-        exact_matches
-    ) > 1:
-
+    if len(exact_matches) == 1:
+        item = exact_matches[0]
+    elif len(exact_matches) > 1:
         await ctx.send(
-            (
-                "🔎 **Multiple exact loot "
-                "entries were found:**\n\n"
-                + "\n".join(
-                    (
-                        f"• **{entry['name']}** "
-                        f"— {entry['rarity']}"
-                    )
-                    for entry
-                    in exact_matches[:15]
-                )
+            "🔎 **Multiple exact loot entries were found:**\n\n"
+            + "\n".join(
+                f"• **{entry['name']}** — {entry['rarity']}"
+                for entry in exact_matches[:15]
             )
         )
         return
-
     else:
-        matches = [
-            item
-            for item
-            in LOOT_DETAILS
-            if query
-            in item[
-                "name"
-            ].lower()
-        ]
-
+        matches = [item for item in LOOT_DETAILS if query in item["name"].lower()]
         if not matches:
-            await ctx.send(
-                (
-                    "❌ No loot item found "
-                    f"matching `{item_name}`."
-                )
-            )
+            await ctx.send(f"❌ No loot item found matching `{item_name}`.")
             return
-
-        if len(
-            matches
-        ) > 1:
-
+        if len(matches) > 1:
             extra = (
-                (
-                    f"\n\n*And "
-                    f"{len(matches) - 15} more. "
-                    "Use a more specific search.*"
-                )
-                if len(matches) > 15
-                else ""
+                f"\n\n*And {len(matches) - 15} more. Use a more specific search.*"
+                if len(matches) > 15 else ""
             )
-
             await ctx.send(
-                (
-                    "🔎 **Multiple loot items "
-                    f"match `{item_name}`:**\n\n"
-                    + "\n".join(
-                        (
-                            f"• **{entry['name']}** "
-                            f"— {entry['rarity']}"
-                        )
-                        for entry
-                        in matches[:15]
-                    )
-                    + extra
+                f"🔎 **Multiple loot items match `{item_name}`:**\n\n"
+                + "\n".join(
+                    f"• **{entry['name']}** — {entry['rarity']}"
+                    for entry in matches[:15]
                 )
+                + extra
             )
             return
+        item = matches[0]
 
-        item = (
-            matches[0]
-        )
-
-    embed = discord.Embed(
-        title=(
-            f"📦 {item['name']}"
-        ),
-        color=theme_color()
-    )
-
-    embed.add_field(
-        name="Rarity",
-        value=item[
-            "rarity"
-        ],
-        inline=False
-    )
-
-    embed.add_field(
-        name="Shop Value",
-        value=item[
-            "shop_value"
-        ],
-        inline=True
-    )
-
-    embed.add_field(
-        name="Minimum Trade Value",
-        value=item[
-            "min_trade"
-        ],
-        inline=True
-    )
-
-    await ctx.send(
-        embed=apply_theme(
-            embed,
-            footer_text_override=(
-                "Guild Loot Registry"
-            )
-        )
-    )
+    embed = discord.Embed(title=f"📦 {item['name']}", color=theme_color())
+    embed.add_field(name="Rarity", value=item["rarity"], inline=False)
+    embed.add_field(name="Shop Value", value=item["shop_value"], inline=True)
+    embed.add_field(name="Minimum Trade Value", value=item["min_trade"], inline=True)
+    await ctx.send(embed=apply_theme(embed, footer_text_override="Guild Loot Registry"))
 
 
-@bot.command(
-    name="newloot"
-)
-async def newloot_cmd(
-    ctx: commands.Context,
-    *,
-    rarity: Optional[str] = None
-):
+@bot.command(name="newloot")
+async def newloot_cmd(ctx: commands.Context, *, rarity: Optional[str] = None):
     if ctx.guild is None:
-        await ctx.send(
-            "❌ This command can only be used in a server."
-        )
+        await ctx.send("❌ This command can only be used in a server.")
         return
-
     if not rarity:
-        await ctx.send(
-            "❌ Usage: `!newloot rare`"
-        )
+        await ctx.send("❌ Usage: `!newloot rare`")
         return
 
     rarity_lookup = {
@@ -4971,529 +1790,107 @@ async def newloot_cmd(
         "legendary": "Legendary",
         "artifact": "Artifact",
     }
-
-    actual_rarity = rarity_lookup.get(
-        rarity.strip().lower()
-    )
-
+    actual_rarity = rarity_lookup.get(rarity.strip().lower())
     if actual_rarity is None:
         await ctx.send(
-            (
-                "❌ Invalid rarity. Use: "
-                "`common`, `uncommon`, `rare`, "
-                "`very rare`, `legendary`, "
-                "or `artifact`."
-            )
+            "❌ Invalid rarity. Use: `common`, `uncommon`, `rare`, "
+            "`very rare`, `legendary`, or `artifact`."
         )
         return
 
-    item = random_loot(
-        actual_rarity
-    )
-
+    item = random_loot(actual_rarity)
     if item is None:
-        await ctx.send(
-            (
-                "❌ No items are loaded "
-                f"for **{actual_rarity}**."
-            )
-        )
+        await ctx.send(f"❌ No items are loaded for **{actual_rarity}**.")
         return
 
-    (
-        item_name,
-        _shop_price
-    ) = item
+    item_name, _shop_price = item
+    await ctx.send(f"🎲 **{actual_rarity} Loot:** {item_name}")
 
-    await ctx.send(
-        (
-            f"🎲 **{actual_rarity} Loot:** "
-            f"{item_name}"
-        )
-    )
 
-@bot.command(
-    name="critmas"
-)
-async def critmas_cmd(
-    ctx: commands.Context,
-    *,
-    args: Optional[str] = None
-):
+@bot.command(name="critmas")
+async def critmas_cmd(ctx: commands.Context, *, args: Optional[str] = None):
     if ctx.guild is None:
-        await ctx.send(
-            "❌ This command can only be used in a server."
-        )
+        await ctx.send("❌ This command can only be used in a server.")
         return
-
-    # =========================
-    # !critmas
-    # View your own wallet
-    # =========================
     if not args:
-        await ctx.send(
-            embed=build_critmas_embed(
-                ctx.author
-            )
-        )
+        await ctx.send(embed=build_critmas_embed(ctx.author))
         return
-
     try:
-        parts = shlex.split(
-            args
-        )
-
+        parts = shlex.split(args)
     except Exception:
-        await ctx.send(
-            (
-                "❌ I couldn't read that command. "
-                "Make sure quotation marks are closed."
-            )
-        )
+        await ctx.send("❌ I couldn't read that command. Make sure quotation marks are closed.")
         return
-
-    if not parts:
-        await ctx.send(
-            embed=build_critmas_embed(
-                ctx.author
-            )
-        )
-        return
-
-    target_member = (
-        ctx.author
-    )
-
-    # =========================
-    # HEARTH TARGETING
-    #
-    # !critmas @user pumpkin +5 "Reason"
-    # !critmas @user tree -5 "Reason"
-    # =========================
-    possible_user_id = parse_user_id(
-        parts[0]
-    )
-
-    if possible_user_id is not None:
-        author_roles = {
-            role.name
-            for role
-            in ctx.author.roles
-        }
-
-        if not (
-            author_roles
-            & PAYDAY_ALLOWED_ROLES
-        ):
-            await ctx.send(
-                (
-                    "❌ Only **The Hearth** may "
-                    "modify another player's "
-                    "event currency."
-                )
-            )
-            return
-
-        target_member = (
-            ctx.guild.get_member(
-                possible_user_id
-            )
-        )
-
-        if target_member is None:
-            try:
-                target_member = (
-                    await ctx.guild.fetch_member(
-                        possible_user_id
-                    )
-                )
-
-            except Exception:
-                target_member = None
-
-        if target_member is None:
-            await ctx.send(
-                "❌ I couldn't find that member."
-            )
-            return
-
-        parts = parts[
-            1:
-        ]
-
-        # Hearth can also just view:
-        # !critmas @user
-        if not parts:
-            await ctx.send(
-                embed=build_critmas_embed(
-                    target_member
-                )
-            )
-            return
-
-    # =========================
-    # CURRENCY
-    # =========================
-    if len(parts) < 2:
-        await ctx.send(
-            (
-                "❌ Usage:\n"
-                "`!critmas`\n"
-                '`!critmas pumpkin -5 "RP Dip"`\n'
-                '`!critmas tree -10 "Targeted Quest"`'
-            )
-        )
-        return
-
-    currency_raw = (
-        parts[0]
-        .strip()
-        .lower()
-    )
-
-    currency_aliases = {
-        "pumpkin": "pumpkin",
-        "pumpkins": "pumpkin",
-        "🎃": "pumpkin",
-
-        "tree": "tree",
-        "trees": "tree",
-        "christmas": "tree",
-        "critmas": "tree",
-        "🎄": "tree",
-    }
-
-    currency = (
-        currency_aliases.get(
-            currency_raw
-        )
-    )
-
-    if currency is None:
-        await ctx.send(
-            (
-                "❌ Currency must be "
-                "`pumpkin` or `tree`."
-            )
-        )
-        return
-
-    # =========================
-    # AMOUNT
-    # =========================
-    try:
-        delta = int(
-            parts[1]
-        )
-
-    except Exception:
-        await ctx.send(
-            (
-                "❌ Amount must be a number "
-                "such as `-5` or `+5`."
-            )
-        )
-        return
-
-    if delta == 0:
-        await ctx.send(
-            "❌ Amount cannot be 0."
-        )
-        return
-
-    reason = (
-        " ".join(
-            parts[
-                2:
-            ]
-        ).strip()
-    )
-
-    if not reason:
-        await ctx.send(
-            (
-                "❌ Please include a reason.\n"
-                "Example: "
-                '`!critmas pumpkin -5 "RP Dip"`'
-            )
-        )
-        return
-
-    author_roles = {
-        role.name
-        for role
-        in ctx.author.roles
-    }
-
-    is_hearth = bool(
-        author_roles
-        & PAYDAY_ALLOWED_ROLES
-    )
-
-    # =========================
-    # ADDING CURRENCY
-    # Hearth only
-    # =========================
-    if delta > 0:
-
+    target = ctx.author
+    possible_uid = parse_user_id(parts[0]) if parts else None
+    if possible_uid is not None:
+        is_hearth = any(r.name == "The Hearth" for r in ctx.author.roles)
         if not is_hearth:
-            await ctx.send(
-                (
-                    "❌ Only **The Hearth** may "
-                    "manually add event currency."
-                )
-            )
+            await ctx.send("❌ Only **The Hearth** may modify another player's event currency.")
             return
-
-        critmas_add_currency(
-            ctx.guild.id,
-            target_member.id,
-            currency,
-            delta
-        )
-
-        emoji = (
-            "🎃"
-            if currency == "pumpkin"
-            else "🎄"
-        )
-
-        currency_name = (
-            "Pumpkins"
-            if currency == "pumpkin"
-            else "Trees"
-        )
-
-        (
-            pumpkins_current,
-            pumpkins_lifetime,
-            trees_current,
-            trees_lifetime
-        ) = critmas_get(
-            ctx.guild.id,
-            target_member.id
-        )
-
-        remaining = (
-            pumpkins_current
-            if currency == "pumpkin"
-            else trees_current
-        )
-
-        embed = discord.Embed(
-            title=(
-                "🎃 Nightmare Before Critmas 🎄"
-            ),
-            description=(
-                "### Event Currency Adjustment"
-            ),
-            color=theme_color()
-        )
-
-        embed.add_field(
-            name="Adventurer",
-            value=target_member.mention,
-            inline=False
-        )
-
-        embed.add_field(
-            name=currency_name,
-            value=(
-                f"**+{delta} {emoji}**"
-            ),
-            inline=True
-        )
-
-        embed.add_field(
-            name="New Balance",
-            value=(
-                f"**{remaining} {emoji}**"
-            ),
-            inline=True
-        )
-
-        embed.add_field(
-            name="For",
-            value=reason,
-            inline=False
-        )
-
-        embed.add_field(
-            name="Adjusted By",
-            value=ctx.author.mention,
-            inline=False
-        )
-
-        await ctx.send(
-            embed=apply_theme(
-                embed,
-                footer_text_override=(
-                    "Nightmare Before Critmas • "
-                    "Event Ledger"
-                )
-            )
-        )
-
+        target = ctx.guild.get_member(possible_uid)
+        if target is None:
+            try:
+                target = await ctx.guild.fetch_member(possible_uid)
+            except Exception:
+                target = None
+        if target is None:
+            await ctx.send("❌ I couldn't find that member.")
+            return
+        parts = parts[1:]
+        if not parts:
+            await ctx.send(embed=build_critmas_embed(target))
+            return
+    if len(parts) < 2:
+        await ctx.send('❌ Usage: `!critmas`, `!critmas pumpkin -5 "RP Dip"`, or `!critmas tree -10 "Targeted Quest"`')
         return
-
-    # =========================
-    # SPENDING
-    # =========================
-    spend_amount = abs(
-        delta
-    )
-
-    (
-        pumpkins_current,
-        pumpkins_lifetime,
-        trees_current,
-        trees_lifetime
-    ) = critmas_get(
-        ctx.guild.id,
-        target_member.id
-    )
-
-    current_balance = (
-        pumpkins_current
-        if currency == "pumpkin"
-        else trees_current
-    )
-
-    emoji = (
-        "🎃"
-        if currency == "pumpkin"
-        else "🎄"
-    )
-
-    currency_name = (
-        "Pumpkins"
-        if currency == "pumpkin"
-        else "Trees"
-    )
-
-    if current_balance < spend_amount:
-        await ctx.send(
-            (
-                f"❌ {target_member.mention} "
-                f"doesn't have enough {emoji}.\n"
-                f"Current Balance: "
-                f"**{current_balance} {emoji}**\n"
-                f"Attempted Spend: "
-                f"**{spend_amount} {emoji}**"
-            )
-        )
+    aliases = {"pumpkin":"pumpkin","pumpkins":"pumpkin","🎃":"pumpkin",
+               "tree":"tree","trees":"tree","christmas":"tree","critmas":"tree","🎄":"tree"}
+    currency = aliases.get(parts[0].lower())
+    if currency is None:
+        await ctx.send("❌ Currency must be `pumpkin` or `tree`.")
         return
-
-    success = critmas_spend_currency(
-        ctx.guild.id,
-        target_member.id,
-        currency,
-        spend_amount
-    )
-
-    if not success:
-        await ctx.send(
-            (
-                "❌ That transaction could not "
-                "be completed. The balance may "
-                "have changed while processing."
-            )
-        )
+    try:
+        delta = int(parts[1])
+    except Exception:
+        await ctx.send("❌ Amount must be a number such as `-5` or `+5`.")
         return
+    if delta == 0:
+        await ctx.send("❌ Amount cannot be 0.")
+        return
+    reason = " ".join(parts[2:]).strip()
+    if not reason:
+        await ctx.send('❌ Please include a reason. Example: `!critmas pumpkin -5 "RP Dip"`')
+        return
+    is_hearth = any(r.name == "The Hearth" for r in ctx.author.roles)
+    emoji = "🎃" if currency == "pumpkin" else "🎄"
+    if delta > 0:
+        if not is_hearth:
+            await ctx.send("❌ Only **The Hearth** may manually add event currency.")
+            return
+        critmas_add_currency(ctx.guild.id, target.id, currency, delta)
+        action = f"+{delta} {emoji}"
+    else:
+        spend = abs(delta)
+        if not critmas_spend_currency(ctx.guild.id, target.id, currency, spend):
+            await ctx.send(f"❌ {target.mention} doesn't have enough {emoji}.")
+            return
+        action = f"-{spend} {emoji}"
+    pc, pl, tc, tl = critmas_get(ctx.guild.id, target.id)
+    balance = pc if currency == "pumpkin" else tc
+    embed = discord.Embed(title="🎃 Nightmare Before Critmas 🎄", description="### Event Currency Adjustment", color=theme_color())
+    embed.add_field(name="Adventurer", value=target.mention, inline=False)
+    embed.add_field(name="Adjustment", value=f"**{action}**", inline=True)
+    embed.add_field(name="New Balance", value=f"**{balance} {emoji}**", inline=True)
+    embed.add_field(name="For", value=reason, inline=False)
+    if target.id != ctx.author.id or delta > 0:
+        embed.add_field(name="Filed By", value=ctx.author.mention, inline=False)
+    await ctx.send(embed=apply_theme(embed, footer_text_override="Nightmare Before Critmas • Event Ledger"))
 
-    (
-        pumpkins_current,
-        pumpkins_lifetime,
-        trees_current,
-        trees_lifetime
-    ) = critmas_get(
-        ctx.guild.id,
-        target_member.id
-    )
 
-    remaining = (
-        pumpkins_current
-        if currency == "pumpkin"
-        else trees_current
-    )
-
-    combined_remaining = (
-        pumpkins_current
-        + trees_current
-    )
-
-    embed = discord.Embed(
-        title=(
-            "🎃 Nightmare Before Critmas 🎄"
-        ),
-        description=(
-            "### Event Purchase Filed"
-        ),
-        color=theme_color()
-    )
-
-    embed.add_field(
-        name="Adventurer",
-        value=target_member.mention,
-        inline=False
-    )
-
-    embed.add_field(
-        name=currency_name,
-        value=(
-            f"**-{spend_amount} {emoji}**"
-        ),
-        inline=True
-    )
-
-    embed.add_field(
-        name="Remaining",
-        value=(
-            f"**{remaining} {emoji}**"
-        ),
-        inline=True
-    )
-
-    embed.add_field(
-        name="For",
-        value=reason,
-        inline=False
-    )
-
-    embed.add_field(
-        name="Combined Event Balance",
-        value=(
-            f"**{combined_remaining} / 100**"
-        ),
-        inline=False
-    )
-
-    if (
-        target_member.id
-        != ctx.author.id
-    ):
-        embed.add_field(
-            name="Filed By",
-            value=ctx.author.mention,
-            inline=False
-        )
-
-    await ctx.send(
-        embed=apply_theme(
-            embed,
-            footer_text_override=(
-                "Nightmare Before Critmas • "
-                "Event Ledger"
-            )
-        )
-    )
 # =========================
 # STAFF
 # =========================
-PAYDAY_ALLOWED_ROLES = {
-    "The Hearth"
-}
-
+PAYDAY_ALLOWED_ROLES = {"The Hearth"}
 PAYDAY_STAFF_ROLES = {
     "Guild Ambassador": 5,
     "Stewards": 5,
@@ -5501,142 +1898,55 @@ PAYDAY_STAFF_ROLES = {
 }
 
 
-@bot.command(
-    name="reloadloot"
-)
-async def reloadloot_cmd(
-    ctx: commands.Context
-):
+@bot.command(name="reloadloot")
+async def reloadloot_cmd(ctx: commands.Context):
     if ctx.guild is None:
-        await ctx.send(
-            "❌ This command can only be used in a server."
-        )
+        await ctx.send("❌ This command can only be used in a server.")
         return
 
-    if not (
-        {
-            role.name
-            for role
-            in ctx.author.roles
-        }
-        & PAYDAY_ALLOWED_ROLES
-    ):
-        await ctx.send(
-            "❌ Only The Hearth may reload the loot registry."
-        )
+    if not ({role.name for role in ctx.author.roles} & PAYDAY_ALLOWED_ROLES):
+        await ctx.send("❌ Only The Hearth may reload the loot registry.")
         return
 
-    global LOOT_TABLE
-    global LOOT_DETAILS
-
-    new_table: Dict[
-        str,
-        List[
-            Tuple[str, str]
-        ]
-    ] = {}
-
-    new_details: List[
-        Dict[str, str]
-    ] = []
+    global LOOT_TABLE, LOOT_DETAILS
+    new_table: Dict[str, List[Tuple[str, str]]] = {}
+    new_details: List[Dict[str, str]] = []
 
     for rarity in RARITY_ORDER:
-        path = _repo_path(
-            f"Guild Loot List - {rarity}.csv"
-        )
+        path = _repo_path(f"Guild Loot List - {rarity}.csv")
+        new_table[rarity] = load_loot_csv(path)
+        new_details.extend(load_loot_details_csv(path, rarity))
 
-        new_table[
-            rarity
-        ] = load_loot_csv(
-            path
-        )
-
-        new_details.extend(
-            load_loot_details_csv(
-                path,
-                rarity
-            )
-        )
-
-    LOOT_TABLE = (
-        new_table
-    )
-
-    LOOT_DETAILS = (
-        new_details
-    )
-
-    await ctx.send(
-        (
-            "✅ Loot registry reloaded.\n"
-            f"**{len(LOOT_DETAILS)}** "
-            "detailed items loaded."
-        )
-    )
+    LOOT_TABLE = new_table
+    LOOT_DETAILS = new_details
+    await ctx.send(f"✅ Loot registry reloaded.\n**{len(LOOT_DETAILS)}** detailed items loaded.")
 
 
-@bot.command(
-    name="payday"
-)
-async def payday_cmd(
-    ctx: commands.Context
-):
+@bot.command(name="payday")
+async def payday_cmd(ctx: commands.Context):
     if ctx.guild is None:
-        await ctx.send(
-            "❌ This command can only be used in a server."
-        )
+        await ctx.send("❌ This command can only be used in a server.")
         return
 
-    if not (
-        {
-            role.name
-            for role
-            in ctx.author.roles
-        }
-        & PAYDAY_ALLOWED_ROLES
-    ):
-        await ctx.send(
-            "❌ Only The Hearth may run staff payday."
-        )
+    if not ({role.name for role in ctx.author.roles} & PAYDAY_ALLOWED_ROLES):
+        await ctx.send("❌ Only The Hearth may run staff payday.")
         return
 
     paid_users = {}
-
-    async for member in (
-        ctx.guild.fetch_members(
-            limit=None
-        )
-    ):
+    async for member in ctx.guild.fetch_members(limit=None):
         if member.bot:
             continue
-
-        role_names = {
-            role.name
-            for role
-            in member.roles
-        }
-
+        role_names = {role.name for role in member.roles}
         amount = 0
         matched_roles = []
 
-        for (
-            role_name,
-            role_amount
-        ) in PAYDAY_STAFF_ROLES.items():
-
+        for role_name, role_amount in PAYDAY_STAFF_ROLES.items():
             if role_name in role_names:
-                amount += (
-                    role_amount
-                )
-
-                matched_roles.append(
-                    role_name
-                )
+                amount += role_amount
+                matched_roles.append(role_name)
 
         if amount > 0:
-            paid_users[
-                member.id
-            ] = {
+            paid_users[member.id] = {
                 "member": member,
                 "amount": amount,
                 "roles": matched_roles,
@@ -5644,698 +1954,275 @@ async def payday_cmd(
 
     if not paid_users:
         await ctx.send(
-            (
-                "❌ No eligible staff found. "
-                "Make sure the bot has "
-                "**Server Members Intent** enabled "
-                "in the Discord Developer Portal."
-            )
+            "❌ No eligible staff found. Make sure the bot has **Server Members Intent** enabled "
+            "in the Discord Developer Portal."
         )
         return
 
     for data in paid_users.values():
-        keys_add(
-            ctx.guild.id,
-            data[
-                "member"
-            ].id,
-            data[
-                "amount"
-            ]
-        )
+        keys_add(ctx.guild.id, data["member"].id, data["amount"])
 
     out = (
         "🗝️ **Staff Payday Issued**\n"
-        "The Guild Registrar has paid "
-        "eligible staff.\n\n"
+        "The Guild Registrar has paid eligible staff.\n\n"
         + "\n".join(
-            (
-                f"{data['member'].mention} — "
-                f"**+{data['amount']}** 🗝️ "
-                f"*({', '.join(data['roles'])})*"
-            )
-            for data
-            in paid_users.values()
+            f"{data['member'].mention} — **+{data['amount']}** 🗝️ "
+            f"*({', '.join(data['roles'])})*"
+            for data in paid_users.values()
         )
     )
 
-    if len(
-        out
-    ) > 1900:
+    if len(out) > 1900:
         await ctx.send(
-            (
-                "🗝️ **Staff Payday Issued**\n"
-                f"Paid **{len(paid_users)}** "
-                "eligible staff, but the list "
-                "was too long to display."
-            )
+            f"🗝️ **Staff Payday Issued**\n"
+            f"Paid **{len(paid_users)}** eligible staff, but the list was too long to display."
         )
         return
 
-    await ctx.send(
-        out
-    )
+    await ctx.send(out)
 
 
 # =========================
 # TRACKING
 # =========================
-def parse_user_id(
-    token: str
-) -> Optional[int]:
-
+def parse_user_id(token: str) -> Optional[int]:
     t = token.strip()
-
-    if (
-        t.startswith(
-            "<@"
-        )
-        and t.endswith(
-            ">"
-        )
-    ):
-        t = t[
-            2:-1
-        ]
-
-        if t.startswith(
-            "!"
-        ):
-            t = t[
-                1:
-            ]
-
-    if t.isdigit():
-        return int(
-            t
-        )
-
-    return None
+    if t.startswith("<@") and t.endswith(">"):
+        t = t[2:-1]
+        if t.startswith("!"):
+            t = t[1:]
+    return int(t) if t.isdigit() else None
 
 
-TRACK_TIMEZONE = ZoneInfo(
-    os.getenv(
-        "TRACK_TIMEZONE",
-        "America/Chicago"
-    )
-)
-
+TRACK_TIMEZONE = ZoneInfo(os.getenv("TRACK_TIMEZONE", "America/Chicago"))
 TRACK_DATE_RANGE_RE = re.compile(
-    r"(\d{1,2}/\d{1,2}/\d{2,4})"
-    r"\s*-\s*"
-    r"(\d{1,2}/\d{1,2}/\d{2,4})"
-    r"\s*$"
+    r"(\d{1,2}/\d{1,2}/\d{2,4})\s*-\s*(\d{1,2}/\d{1,2}/\d{2,4})\s*$"
 )
 
 
-def parse_track_date(
-    value: str
-):
-    for fmt in (
-        "%m/%d/%y",
-        "%m/%d/%Y"
-    ):
+def parse_track_date(value: str):
+    for fmt in ("%m/%d/%y", "%m/%d/%Y"):
         try:
-            return datetime.strptime(
-                value.strip(),
-                fmt
-            ).date()
-
+            return datetime.strptime(value.strip(), fmt).date()
         except ValueError:
             pass
-
-    raise ValueError(
-        f"Invalid date: {value}"
-    )
+    raise ValueError(f"Invalid date: {value}")
 
 
-def get_track_date_range(
-    start_text: str,
-    end_text: str
-):
-    start_date = parse_track_date(
-        start_text
-    )
-
-    end_date = parse_track_date(
-        end_text
-    )
-
+def get_track_date_range(start_text: str, end_text: str):
+    start_date = parse_track_date(start_text)
+    end_date = parse_track_date(end_text)
     if end_date < start_date:
-        raise ValueError(
-            "End date cannot be before start date."
-        )
+        raise ValueError("End date cannot be before start date.")
 
-    start_dt = datetime(
-        start_date.year,
-        start_date.month,
-        start_date.day,
-        tzinfo=TRACK_TIMEZONE
-    )
-
-    next_day = (
-        end_date
-        + timedelta(
-            days=1
-        )
-    )
-
-    end_dt = datetime(
-        next_day.year,
-        next_day.month,
-        next_day.day,
-        tzinfo=TRACK_TIMEZONE
-    )
-
-    return (
-        start_date,
-        end_date,
-        start_dt.timestamp(),
-        end_dt.timestamp()
-    )
+    start_dt = datetime(start_date.year, start_date.month, start_date.day, tzinfo=TRACK_TIMEZONE)
+    next_day = end_date + timedelta(days=1)
+    end_dt = datetime(next_day.year, next_day.month, next_day.day, tzinfo=TRACK_TIMEZONE)
+    return start_date, end_date, start_dt.timestamp(), end_dt.timestamp()
 
 
-async def resolve_track_member(
-    guild: discord.Guild,
-    value: str
-) -> Optional[discord.Member]:
-
-    value = (
-        value.strip()
-    )
-
-    uid = parse_user_id(
-        value
-    )
+async def resolve_track_member(guild: discord.Guild, value: str) -> Optional[discord.Member]:
+    value = value.strip()
+    uid = parse_user_id(value)
 
     if uid is not None:
-        member = guild.get_member(
-            uid
-        )
-
+        member = guild.get_member(uid)
         if member is None:
             try:
-                member = await guild.fetch_member(
-                    uid
-                )
-
+                member = await guild.fetch_member(uid)
             except Exception:
                 return None
-
         return member
 
-    search = (
-        value
-        .lstrip("@")
-        .lower()
-    )
+    search = value.lstrip("@").lower()
 
-    def matches_member(
-        member: discord.Member
-    ) -> bool:
-
-        names = {
-            member.name.lower(),
-            member.display_name.lower(),
-            str(
-                member
-            ).lower(),
-        }
-
-        global_name = getattr(
-            member,
-            "global_name",
-            None
-        )
-
+    def matches_member(member: discord.Member) -> bool:
+        names = {member.name.lower(), member.display_name.lower(), str(member).lower()}
+        global_name = getattr(member, "global_name", None)
         if global_name:
-            names.add(
-                global_name.lower()
-            )
+            names.add(global_name.lower())
+        return search in names
 
-        return (
-            search
-            in names
-        )
-
-    matches = [
-        member
-        for member
-        in guild.members
-        if matches_member(
-            member
-        )
-    ]
-
-    if len(
-        matches
-    ) == 1:
-        return matches[
-            0
-        ]
+    matches = [member for member in guild.members if matches_member(member)]
+    if len(matches) == 1:
+        return matches[0]
 
     if not matches:
         try:
             fetched = []
-
-            async for member in (
-                guild.fetch_members(
-                    limit=None
-                )
-            ):
-                if matches_member(
-                    member
-                ):
-                    fetched.append(
-                        member
-                    )
-
-            if len(
-                fetched
-            ) == 1:
-                return fetched[
-                    0
-                ]
-
+            async for member in guild.fetch_members(limit=None):
+                if matches_member(member):
+                    fetched.append(member)
+            if len(fetched) == 1:
+                return fetched[0]
         except Exception:
             pass
 
     return None
 
 
-@bot.command(
-    name="track"
-)
-async def track_cmd(
-    ctx: commands.Context,
-    *,
-    args: Optional[str] = None
-):
+@bot.command(name="track")
+async def track_cmd(ctx: commands.Context, *, args: Optional[str] = None):
     if ctx.guild is None:
-        await ctx.send(
-            "❌ This command can only be used in a server."
-        )
+        await ctx.send("❌ This command can only be used in a server.")
         return
 
-    if not (
-        {
-            role.name
-            for role
-            in ctx.author.roles
-        }
-        & PAYDAY_ALLOWED_ROLES
-    ):
-        await ctx.send(
-            (
-                "❌ Only The Hearth may use "
-                "the RP tracking command."
-            )
-        )
+    if not ({role.name for role in ctx.author.roles} & PAYDAY_ALLOWED_ROLES):
+        await ctx.send("❌ Only The Hearth may use the RP tracking command.")
         return
 
     if not args:
         await ctx.send(
-            (
-                "❌ Usage:\n"
-                "`!track rphours @user 10/1/26-10/19/26`\n"
-                "`!track rpsessions @user 10/1/26-10/19/26`\n"
-                "`!track rptop 5 10/1/26-10/19/26`"
-            )
+            "❌ Usage:\n"
+            "`!track rphours @user 10/1/26-10/19/26`\n"
+            "`!track rpsessions @user 10/1/26-10/19/26`\n"
+            "`!track rptop 5 10/1/26-10/19/26`"
         )
         return
 
-    first_split = (
-        args.strip()
-        .split(
-            maxsplit=1
-        )
-    )
+    first_split = args.strip().split(maxsplit=1)
+    mode = first_split[0].lower()
+    remainder = first_split[1].strip() if len(first_split) > 1 else ""
 
-    mode = (
-        first_split[
-            0
-        ].lower()
-    )
-
-    remainder = (
-        first_split[
-            1
-        ].strip()
-        if len(
-            first_split
-        ) > 1
-        else ""
-    )
-
-    if mode not in (
-        "rphours",
-        "rpsessions",
-        "rptop"
-    ):
-        await ctx.send(
-            (
-                "❌ Tracking type must be "
-                "`rphours`, `rpsessions`, "
-                "or `rptop`."
-            )
-        )
+    if mode not in ("rphours", "rpsessions", "rptop"):
+        await ctx.send("❌ Tracking type must be `rphours`, `rpsessions`, or `rptop`.")
         return
 
-    date_match = (
-        TRACK_DATE_RANGE_RE.search(
-            remainder
-        )
-    )
-
+    date_match = TRACK_DATE_RANGE_RE.search(remainder)
     if not date_match:
-        await ctx.send(
-            (
-                "❌ I couldn't read the date range.\n"
-                "Use something like: "
-                "`10/1/26-10/19/26`"
-            )
-        )
+        await ctx.send("❌ I couldn't read the date range.\nUse something like: `10/1/26-10/19/26`")
         return
 
     try:
-        (
-            start_date,
-            end_date,
-            start_ts,
-            end_ts
-        ) = get_track_date_range(
-            date_match.group(
-                1
-            ),
-            date_match.group(
-                2
-            )
+        start_date, end_date, start_ts, end_ts = get_track_date_range(
+            date_match.group(1), date_match.group(2)
         )
-
     except ValueError as e:
-        await ctx.send(
-            f"❌ {e}"
-        )
+        await ctx.send(f"❌ {e}")
         return
 
-    display_range = (
-        f"{start_date.strftime('%m/%d/%Y')} "
-        "through "
-        f"{end_date.strftime('%m/%d/%Y')}"
-    )
+    display_range = f"{start_date.strftime('%m/%d/%Y')} through {end_date.strftime('%m/%d/%Y')}"
 
     if mode == "rptop":
-
         try:
-            amount = int(
-                remainder[
-                    :date_match.start()
-                ].strip()
-            )
-
+            amount = int(remainder[:date_match.start()].strip())
         except Exception:
-            await ctx.send(
-                (
-                    "❌ Usage: "
-                    "`!track rptop 5 "
-                    "10/1/26-10/19/26`"
-                )
-            )
+            await ctx.send("❌ Usage: `!track rptop 5 10/1/26-10/19/26`")
             return
 
         if amount < 1:
-            await ctx.send(
-                (
-                    "❌ Leaderboard size "
-                    "must be at least 1."
-                )
-            )
+            await ctx.send("❌ Leaderboard size must be at least 1.")
             return
-
         if amount > 25:
-            await ctx.send(
-                (
-                    "❌ `rptop` can show "
-                    "a maximum of 25 users."
-                )
-            )
+            await ctx.send("❌ `rptop` can show a maximum of 25 users at once.")
             return
 
         with db() as conn:
             with conn.cursor() as cur:
-
                 cur.execute("""
                     WITH rp_entries AS (
                         SELECT
                             p.user_id,
-                            FLOOR(
-                                (
-                                    GREATEST(
-                                        COALESCE(
-                                            p.seconds,
-                                            0
-                                        ),
-                                        0
-                                    )
-                                    + 900
-                                )
-                                / 3600.0
-                            )::INT
-                            AS rewarded_hours
+                            FLOOR((GREATEST(COALESCE(p.seconds,0),0)+900)/3600.0)::INT AS rewarded_hours
                         FROM participants AS p
-                        INNER JOIN sessions AS s
-                            ON s.message_id =
-                               p.message_id
-                        WHERE
-                            s.guild_id=%s
-                            AND s.ended_at
-                                IS NOT NULL
-                            AND s.ended_at >= %s
-                            AND s.ended_at < %s
+                        INNER JOIN sessions AS s ON s.message_id=p.message_id
+                        WHERE s.guild_id=%s
+                          AND s.ended_at IS NOT NULL
+                          AND s.ended_at >= %s
+                          AND s.ended_at < %s
                     )
                     SELECT
                         user_id,
-                        COALESCE(
-                            SUM(
-                                rewarded_hours
-                            ),
-                            0
-                        ) AS total_hours,
-                        COUNT(*) FILTER (
-                            WHERE
-                                rewarded_hours >= 1
-                        ) AS rp_sessions
+                        COALESCE(SUM(rewarded_hours),0) AS total_hours,
+                        COUNT(*) FILTER (WHERE rewarded_hours>=1) AS rp_sessions
                     FROM rp_entries
                     GROUP BY user_id
-                    HAVING
-                        SUM(
-                            rewarded_hours
-                        ) > 0
-                    ORDER BY
-                        total_hours DESC,
-                        rp_sessions DESC,
-                        user_id ASC
+                    HAVING SUM(rewarded_hours)>0
+                    ORDER BY total_hours DESC,rp_sessions DESC,user_id ASC
                     LIMIT %s
-                """, (
-                    ctx.guild.id,
-                    start_ts,
-                    end_ts,
-                    amount
-                ))
-
+                """, (ctx.guild.id, start_ts, end_ts, amount))
                 rows = cur.fetchall()
 
         if not rows:
-            await ctx.send(
-                (
-                    "📊 No rewarded RP activity "
-                    f"was found for "
-                    f"**{display_range}**."
-                )
-            )
+            await ctx.send(f"📊 No rewarded RP activity was found for **{display_range}**.")
             return
 
         lines = [
-            (
-                f"**{pos}.** "
-                f"<@{int(uid)}> — "
-                f"**{int(hours or 0)}h** — "
-                f"**{int(sessions or 0)} "
-                "RP sessions**"
-            )
-            for (
-                pos,
-                (
-                    uid,
-                    hours,
-                    sessions
-                )
-            ) in enumerate(
-                rows,
-                start=1
-            )
+            f"**{pos}.** <@{int(uid)}> — **{int(hours or 0)}h** — **{int(sessions or 0)} RP sessions**"
+            for pos, (uid, hours, sessions) in enumerate(rows, start=1)
         ]
 
         embed = discord.Embed(
-            title=(
-                "🏆 RP Activity Leaderboard"
-            ),
-            description=(
-                f"**{display_range}**\n\n"
-                + "\n".join(
-                    lines
-                )
-            ),
-            color=theme_color()
+            title="🏆 RP Activity Leaderboard",
+            description=f"**{display_range}**\n\n" + "\n".join(lines),
+            color=theme_color(),
         )
-
         await ctx.send(
             embed=apply_theme(
                 embed,
-                footer_text_override=(
-                    "Hours are calculated using "
-                    "rewarded RP hours."
-                )
+                footer_text_override="Hours are calculated using rewarded RP hours.",
             )
         )
         return
 
-    target_text = remainder[
-        :date_match.start()
-    ].strip()
-
+    target_text = remainder[:date_match.start()].strip()
     if not target_text:
-        await ctx.send(
-            (
-                f"❌ Usage: "
-                f"`!track {mode} @user "
-                "10/1/26-10/19/26`"
-            )
-        )
+        await ctx.send(f"❌ Usage: `!track {mode} @user 10/1/26-10/19/26`")
         return
 
-    member = await resolve_track_member(
-        ctx.guild,
-        target_text
-    )
-
+    member = await resolve_track_member(ctx.guild, target_text)
     if member is None:
         await ctx.send(
-            (
-                "❌ I couldn't uniquely identify "
-                "that user.\n"
-                "Use their Discord mention, "
-                "user ID, username, "
-                "or display name."
-            )
+            "❌ I couldn't uniquely identify that user.\n"
+            "Use their Discord mention, user ID, username, or display name."
         )
         return
 
     with db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
                 WITH rp_entries AS (
-                    SELECT
-                        FLOOR(
-                            (
-                                GREATEST(
-                                    COALESCE(
-                                        p.seconds,
-                                        0
-                                    ),
-                                    0
-                                )
-                                + 900
-                            )
-                            / 3600.0
-                        )::INT
-                        AS rewarded_hours
+                    SELECT FLOOR((GREATEST(COALESCE(p.seconds,0),0)+900)/3600.0)::INT AS rewarded_hours
                     FROM participants AS p
-                    INNER JOIN sessions AS s
-                        ON s.message_id =
-                           p.message_id
-                    WHERE
-                        s.guild_id=%s
-                        AND p.user_id=%s
-                        AND s.ended_at
-                            IS NOT NULL
-                        AND s.ended_at >= %s
-                        AND s.ended_at < %s
+                    INNER JOIN sessions AS s ON s.message_id=p.message_id
+                    WHERE s.guild_id=%s
+                      AND p.user_id=%s
+                      AND s.ended_at IS NOT NULL
+                      AND s.ended_at >= %s
+                      AND s.ended_at < %s
                 )
                 SELECT
-                    COALESCE(
-                        SUM(
-                            rewarded_hours
-                        ),
-                        0
-                    ),
-                    COUNT(*) FILTER (
-                        WHERE
-                            rewarded_hours >= 1
-                    )
+                    COALESCE(SUM(rewarded_hours),0),
+                    COUNT(*) FILTER (WHERE rewarded_hours>=1)
                 FROM rp_entries
-            """, (
-                ctx.guild.id,
-                member.id,
-                start_ts,
-                end_ts
-            ))
-
+            """, (ctx.guild.id, member.id, start_ts, end_ts))
             row = cur.fetchone()
 
-    total_hours = int(
-        row[0]
-        or 0
-    )
-
-    rp_sessions = int(
-        row[1]
-        or 0
-    )
+    total_hours = int(row[0] or 0)
+    rp_sessions = int(row[1] or 0)
 
     if mode == "rphours":
-        title = (
-            "📊 RP Hours"
-        )
-
+        title = "📊 RP Hours"
         body = (
-            f"{member.mention}\n"
-            f"**{display_range}**\n\n"
-            f"Rewarded RP Hours: "
-            f"**{total_hours}h**\n"
-            f"Qualifying RP Sessions: "
-            f"**{rp_sessions}**"
+            f"{member.mention}\n**{display_range}**\n\n"
+            f"Rewarded RP Hours: **{total_hours}h**\n"
+            f"Qualifying RP Sessions: **{rp_sessions}**"
         )
-
     else:
-        title = (
-            "📊 RP Sessions"
-        )
-
+        title = "📊 RP Sessions"
         body = (
-            f"{member.mention}\n"
-            f"**{display_range}**\n\n"
-            f"Qualifying RP Sessions: "
-            f"**{rp_sessions}**\n"
-            f"Rewarded RP Hours: "
-            f"**{total_hours}h**"
+            f"{member.mention}\n**{display_range}**\n\n"
+            f"Qualifying RP Sessions: **{rp_sessions}**\n"
+            f"Rewarded RP Hours: **{total_hours}h**"
         )
 
-    embed = discord.Embed(
-        title=title,
-        description=body,
-        color=theme_color()
-    )
-
+    embed = discord.Embed(title=title, description=body, color=theme_color())
     await ctx.send(
         embed=apply_theme(
             embed,
             footer_text_override=(
-                "A qualifying session is one "
-                "that earned at least "
-                "1 RP reward hour."
-            )
+                "A qualifying session is one that earned at least 1 RP reward hour."
+            ),
         )
     )
 
@@ -6343,224 +2230,77 @@ async def track_cmd(
 # =========================
 # QUEST RECORDS: !qrecords
 # =========================
-@bot.command(
-    name="qrecords"
-)
-async def qrecords_cmd(
-    ctx: commands.Context,
-    *,
-    args: str
-):
+@bot.command(name="qrecords")
+async def qrecords_cmd(ctx: commands.Context, *, args: str):
     if ctx.guild is None:
-        await ctx.send(
-            "❌ This command can only be used in a server."
-        )
+        await ctx.send("❌ This command can only be used in a server.")
         return
 
     try:
-        args = (
-            args
-            .replace(
-                "“",
-                '"'
-            )
-            .replace(
-                "”",
-                '"'
-            )
-            .replace(
-                "’",
-                "'"
-            )
-        )
-
-        parts = shlex.split(
-            args
-        )
-
+        args = args.replace("“", '"').replace("”", '"').replace("’", "'")
+        parts = shlex.split(args)
     except Exception:
+        await ctx.send("❌ Could not parse. Make sure your quotes are closed properly.")
+        return
+
+    if len(parts) < 6:
         await ctx.send(
-            (
-                "❌ Could not parse. "
-                "Make sure your quotes "
-                "are closed properly."
-            )
+            '❌ Usage: !qrecords "Name" "Desc" "Difficulty" "xp-min/xp-max" '
+            '"gp-min/gp-max" "loot/none" @p char level ...\n'
+            'Use level `21` for a Specialist character.'
         )
         return
 
-    if len(
-        parts
-    ) < 6:
-        await ctx.send(
-            (
-                '❌ Usage: !qrecords '
-                '"Name" "Desc" "Difficulty" '
-                '"xp-min/xp-max" '
-                '"gp-min/gp-max" '
-                '"loot/none" '
-                '@p char level ...\n'
-                'Use level `21` for '
-                'a Specialist character.'
-            )
-        )
+    qname, qdesc, diff, xp_mode_raw, gp_mode_raw, loot_raw = parts[:6]
+    rest = parts[6:]
+    xp_mode = "max" if "max" in xp_mode_raw.lower() else "min"
+    gp_mode = "max" if "max" in gp_mode_raw.lower() else "min"
+    do_loot = loot_raw.strip().lower() in ("loot", "yes", "true", "1")
+
+    if len(rest) % 3 != 0:
+        await ctx.send("❌ Player list must be groups of 3: @player CharacterName Level")
         return
 
-    (
-        qname,
-        qdesc,
-        diff,
-        xp_mode_raw,
-        gp_mode_raw,
-        loot_raw
-    ) = parts[:6]
+    lines: List[str] = []
+    pending_specialist_coins: Dict[int, int] = {}
+    pending_player_keys: Dict[int, int] = {}
+    event_active = nightmare_event_active()
+    pending_event_tree_users = set()
 
-    rest = (
-        parts[6:]
-    )
-
-    xp_mode = (
-        "max"
-        if "max"
-        in xp_mode_raw.lower()
-        else "min"
-    )
-
-    gp_mode = (
-        "max"
-        if "max"
-        in gp_mode_raw.lower()
-        else "min"
-    )
-
-    do_loot = (
-        loot_raw
-        .strip()
-        .lower()
-        in (
-            "loot",
-            "yes",
-            "true",
-            "1"
-        )
-    )
-
-    if (
-        len(
-            rest
-        )
-        % 3
-        != 0
-    ):
-        await ctx.send(
-            (
-                "❌ Player list must be "
-                "groups of 3: "
-                "@player CharacterName Level"
-            )
-        )
-        return
-
-    lines: List[
-        str
-    ] = []
-
-    pending_specialist_coins: Dict[
-        int,
-        int
-    ] = {}
-
-    pending_player_keys: Dict[
-        int,
-        int
-    ] = {}
-
-    event_active = (
-        nightmare_event_active()
-    )
-
-    pending_event_tree_users = (
-        set()
-    )
-
-    for i in range(
-        0,
-        len(
-            rest
-        ),
-        3
-    ):
-        (
-            user_tok,
-            char,
-            lvl_tok
-        ) = rest[
-            i:i + 3
-        ]
-
-        uid = parse_user_id(
-            user_tok
-        )
+    for i in range(0, len(rest), 3):
+        user_tok, char, lvl_tok = rest[i:i + 3]
+        uid = parse_user_id(user_tok)
 
         if uid is None:
-            await ctx.send(
-                (
-                    "❌ Couldn't read player "
-                    f"mention/id: `{user_tok}`"
-                )
-            )
+            await ctx.send(f"❌ Couldn't read player mention/id: `{user_tok}`")
             return
 
-        member = ctx.guild.get_member(
-            uid
-        )
-
+        member = ctx.guild.get_member(uid)
         if member is None:
             try:
-                member = await ctx.guild.fetch_member(
-                    uid
-                )
-
+                member = await ctx.guild.fetch_member(uid)
             except Exception:
                 member = None
 
         if member is None:
-            await ctx.send(
-                (
-                    "❌ Couldn't find that member "
-                    "in this server: "
-                    f"`{user_tok}`"
-                )
-            )
+            await ctx.send(f"❌ Couldn't find that member in this server: `{user_tok}`")
             return
 
         try:
-            lvl = int(
-                lvl_tok
-            )
-
+            lvl = int(lvl_tok)
             if not 1 <= lvl <= 21:
                 raise ValueError
-
         except Exception:
             await ctx.send(
-                (
-                    f"❌ Bad level for "
-                    f"{member.mention}: "
-                    f"`{lvl_tok}`. "
-                    "Use levels `1-20`, "
-                    "or `21` for Specialist."
-                )
+                f"❌ Bad level for {member.mention}: `{lvl_tok}`. "
+                "Use levels `1-20`, or `21` for Specialist."
             )
             return
 
         if event_active:
-            pending_event_tree_users.add(
-                uid
-            )
+            pending_event_tree_users.add(uid)
 
-        specialist_coins = (
-            None
-        )
+        specialist_coins = None
 
         if lvl == 21:
             specialist_coins = (
@@ -6568,97 +2308,41 @@ async def qrecords_cmd(
                 if xp_mode == "max"
                 else SPECIALIST_QUEST_COINS_MIN
             )
-
             gp = (
                 SPECIALIST_QUEST_GP_MAX
                 if gp_mode == "max"
                 else SPECIALIST_QUEST_GP_MIN
             )
-
             if DOUBLE_QUEST_EVENT_ACTIVE:
                 gp *= 2
 
             xp = None
             xp_keys = None
-
-            pending_specialist_coins[
-                uid
-            ] = (
-                pending_specialist_coins.get(
-                    uid,
-                    0
-                )
+            pending_specialist_coins[uid] = (
+                pending_specialist_coins.get(uid, 0)
                 + specialist_coins
             )
 
         elif lvl == 20:
-            (
-                gp_min,
-                gp_max
-            ) = QUEST_GP.get(
-                20,
-                (
-                    1000,
-                    2000
-                )
-            )
-
-            gp = (
-                gp_max
-                if gp_mode == "max"
-                else gp_min
-            )
-
+            gp_min, gp_max = QUEST_GP.get(20, (1000, 2000))
+            gp = gp_max if gp_mode == "max" else gp_min
             if DOUBLE_QUEST_EVENT_ACTIVE:
                 gp *= 2
 
             xp = None
             xp_keys = 4
 
-            pending_player_keys[
-                uid
-            ] = (
-                pending_player_keys.get(
-                    uid,
-                    0
-                )
+            # FIX: Level 20 quest keys now actually go to the player's keyring.
+            pending_player_keys[uid] = (
+                pending_player_keys.get(uid, 0)
                 + xp_keys
             )
 
         else:
-            (
-                xp_min,
-                xp_max
-            ) = QUEST_XP.get(
-                lvl,
-                (
-                    0,
-                    0
-                )
-            )
-
-            (
-                gp_min,
-                gp_max
-            ) = QUEST_GP.get(
-                lvl,
-                (
-                    0,
-                    0
-                )
-            )
-
-            xp = (
-                xp_max
-                if xp_mode == "max"
-                else xp_min
-            )
-
-            gp = (
-                gp_max
-                if gp_mode == "max"
-                else gp_min
-            )
+            xp_min, xp_max = QUEST_XP.get(lvl, (0, 0))
+            gp_min, gp_max = QUEST_GP.get(lvl, (0, 0))
+            xp = xp_max if xp_mode == "max" else xp_min
+            gp = gp_max if gp_mode == "max" else gp_min
 
             if DOUBLE_QUEST_EVENT_ACTIVE:
                 xp *= 2
@@ -6666,221 +2350,91 @@ async def qrecords_cmd(
 
             xp_keys = None
 
-        loot_txt = (
-            "none"
-        )
-
-        gm_roll = (
-            None
-        )
+        loot_txt = "none"
+        gm_roll = None
 
         if do_loot:
-            gm_roll = random.randint(
-                1,
-                100
-            )
-
-            base = rarity_for_level(
-                lvl
-            )
-
-            final_rarity = rarity_shift(
-                base,
-                gm_roll,
-                lvl
-            )
-
-            item = random_loot(
-                final_rarity
-            )
+            gm_roll = random.randint(1, 100)
+            base = rarity_for_level(lvl)
+            final_rarity = rarity_shift(base, gm_roll, lvl)
+            item = random_loot(final_rarity)
 
             if item:
-                (
-                    loot_name,
-                    _
-                ) = item
-
-                loot_txt = (
-                    loot_name
-                )
-
+                loot_name, _ = item
+                loot_txt = loot_name
             else:
-                loot_txt = (
-                    "(No items loaded for "
-                    f"{final_rarity})"
-                )
+                loot_txt = f"(No items loaded for {final_rarity})"
 
         if lvl == 21:
-            reward_str = (
-                f"{specialist_coins} 🪙, "
-                f"{gp} gp"
-            )
-
+            reward_str = f"{specialist_coins} 🪙, {gp} gp"
         elif lvl == 20:
-            reward_str = (
-                f"{xp_keys} 🗝️, "
-                f"{gp} gp"
-            )
-
+            reward_str = f"{xp_keys} 🗝️, {gp} gp"
         else:
-            reward_str = (
-                f"{xp} xp, "
-                f"{gp} gp"
-            )
+            reward_str = f"{xp} xp, {gp} gp"
 
-        reward_bits = (
-            reward_str
-        )
-
+        reward_bits = reward_str
         if event_active:
-            reward_bits += (
-                f", {NIGHTMARE_QUEST_TREES} 🎄"
-            )
+            reward_bits += f", {NIGHTMARE_QUEST_TREES} 🎄"
 
         if do_loot:
-            reward_bits += (
-                f", {loot_txt}, "
-                "(Grandmaster rolled: "
-                f"{gm_roll})"
-            )
-
+            reward_bits += f", {loot_txt}, (Grandmaster rolled: {gm_roll})"
         else:
-            reward_bits += (
-                ", none"
-            )
+            reward_bits += ", none"
 
-        tier_display = (
-            "Specialist"
-            if lvl == 21
-            else str(
-                lvl
-            )
-        )
-
+        tier_display = "Specialist" if lvl == 21 else str(lvl)
         lines.append(
-            (
-                f"{member.mention} - "
-                f"{char} "
-                f"{tier_display} - "
-                f"||{reward_bits}||"
-            )
+            f"{member.mention} - {char} {tier_display} - ||{reward_bits}||"
         )
 
     DM_KEYS = 10
-
     if DOUBLE_QUEST_EVENT_ACTIVE:
         DM_KEYS *= 2
 
-    dm_reward_str = (
-        f"{DM_KEYS} 🗝️"
-    )
-
+    dm_reward_str = f"{DM_KEYS} 🗝️"
     if event_active:
-        dm_reward_str += (
-            f", {NIGHTMARE_QUEST_TREES} 🎄"
-        )
+        dm_reward_str += f", {NIGHTMARE_QUEST_TREES} 🎄"
 
     out = (
         f"Quest Name: {qname}\n"
         f"Quest Description: {qdesc}\n"
         f"Quest Difficulty: {diff}\n"
-        + "\n".join(
-            lines
-        )
+        + "\n".join(lines)
         + f"\nDM ||{dm_reward_str}||"
     )
 
-    if len(
-        out
-    ) > 1900:
+    if len(out) > 1900:
         await ctx.send(
-            (
-                "❌ Output too long for one message. "
-                "Run with fewer players "
-                "or shorter text."
-            )
+            "❌ Output too long for one message. Run with fewer players or shorter text."
         )
         return
 
-    for (
-        specialist_user_id,
-        coin_amount
-    ) in pending_specialist_coins.items():
+    for specialist_user_id, coin_amount in pending_specialist_coins.items():
+        special_add(ctx.guild.id, specialist_user_id, coin_amount)
 
-        special_add(
-            ctx.guild.id,
-            specialist_user_id,
-            coin_amount
-        )
-
-    for (
-        player_user_id,
-        key_amount
-    ) in pending_player_keys.items():
-
-        keys_add(
-            ctx.guild.id,
-            player_user_id,
-            key_amount
-        )
+    # FIX: Apply Level 20 quest keys after the record passes validation.
+    for player_user_id, key_amount in pending_player_keys.items():
+        keys_add(ctx.guild.id, player_user_id, key_amount)
 
     if event_active:
+        for event_user_id in pending_event_tree_users:
+            critmas_add_trees(ctx.guild.id, event_user_id, NIGHTMARE_QUEST_TREES)
+        critmas_add_trees(ctx.guild.id, ctx.author.id, NIGHTMARE_QUEST_TREES)
 
-        for event_user_id in (
-            pending_event_tree_users
-        ):
-            critmas_add_trees(
-                ctx.guild.id,
-                event_user_id,
-                NIGHTMARE_QUEST_TREES
-            )
-
-        critmas_add_trees(
-            ctx.guild.id,
-            ctx.author.id,
-            NIGHTMARE_QUEST_TREES
-        )
-
-    keys_add(
-        ctx.guild.id,
-        ctx.author.id,
-        DM_KEYS
-    )
-
-    await ctx.send(
-        out
-    )
+    keys_add(ctx.guild.id, ctx.author.id, DM_KEYS)
+    await ctx.send(out)
 
 
 # =========================
 # ARCANE EXCHANGE
 # =========================
-@bot.command(
-    name="arcaneexchange"
-)
-async def arcaneexchange_cmd(
-    ctx: commands.Context
-):
+@bot.command(name="arcaneexchange")
+async def arcaneexchange_cmd(ctx: commands.Context):
     if ctx.guild is None:
-        await ctx.send(
-            "❌ This command can only be used in a server."
-        )
+        await ctx.send("❌ This command can only be used in a server.")
         return
 
-    if not (
-        {
-            role.name
-            for role
-            in ctx.author.roles
-        }
-        & PAYDAY_ALLOWED_ROLES
-    ):
-        await ctx.send(
-            (
-                "❌ Only The Hearth may "
-                "use the Arcane Exchange."
-            )
-        )
+    if not ({role.name for role in ctx.author.roles} & PAYDAY_ALLOWED_ROLES):
+        await ctx.send("❌ Only The Hearth may use the Arcane Exchange.")
         return
 
     rarity_counts = {
@@ -6893,519 +2447,182 @@ async def arcaneexchange_cmd(
 
     output_lines = []
 
-    for rarity in [
-        "Legendary",
-        "Very Rare",
-        "Rare",
-        "Uncommon",
-        "Common"
-    ]:
-
-        pool = LOOT_TABLE.get(
-            rarity,
-            []
-        )
-
+    for rarity in ["Legendary", "Very Rare", "Rare", "Uncommon", "Common"]:
+        pool = LOOT_TABLE.get(rarity, [])
         if not pool:
-            output_lines.append(
-                (
-                    f"**__{rarity}__**\n"
-                    "(No items loaded)"
-                )
-            )
+            output_lines.append(f"**__{rarity}__**\n(No items loaded)")
             continue
 
-        items = random.sample(
-            pool,
-            min(
-                rarity_counts[
-                    rarity
-                ],
-                len(
-                    pool
-                )
-            )
-        )
+        items = random.sample(pool, min(rarity_counts[rarity], len(pool)))
+        item_width = max(len(name) for name, _ in items)
+        price_width = max(len(price) for _, price in items)
 
-        item_width = max(
-            len(
-                name
-            )
-            for (
-                name,
-                _
-            ) in items
-        )
+        section = [f"**__{rarity}__**", "```"]
+        for name, price in items:
+            section.append(f"{name:<{item_width}}  {price:>{price_width}}")
+        section.append("```")
+        output_lines.append("\n".join(section))
 
-        price_width = max(
-            len(
-                price
-            )
-            for (
-                _,
-                price
-            ) in items
-        )
-
-        section = [
-            f"**__{rarity}__**",
-            "```"
-        ]
-
-        for (
-            name,
-            price
-        ) in items:
-
-            section.append(
-                (
-                    f"{name:<{item_width}}  "
-                    f"{price:>{price_width}}"
-                )
-            )
-
-        section.append(
-            "```"
-        )
-
-        output_lines.append(
-            "\n".join(
-                section
-            )
-        )
-
-    final_output = (
-        "\n\n".join(
-            output_lines
-        )
-    )
-
-    if len(
-        final_output
-    ) > 1900:
-        await ctx.send(
-            "❌ Output too long."
-        )
+    final_output = "\n\n".join(output_lines)
+    if len(final_output) > 1900:
+        await ctx.send("❌ Output too long.")
         return
 
-    await ctx.send(
-        final_output
-    )
+    await ctx.send(final_output)
 
 
 # =========================
 # APPROVE
 # =========================
-ALLOWED_APPROVE_ROLES = {
-    "Stewards",
-    "The Hearth",
-    "DM"
-}
-
-APPROVE_REMOVE_ROLES = {
-    "Applicant"
-}
-
-APPROVE_ADD_ROLES = {
-    "Guild Initiate",
-    "Apprentice (2-4)",
-    "Fresh Adventurer"
-}
-
-GUILD_AMBASSADOR_ROLE_NAME = (
-    "Guild Ambassador"
-)
-
-FRESH_ADVENTURER_ROLE_NAME = (
-    "Fresh Adventurer"
-)
+ALLOWED_APPROVE_ROLES = {"Stewards", "The Hearth", "DM"}
+APPROVE_REMOVE_ROLES = {"Applicant"}
+APPROVE_ADD_ROLES = {"Guild Initiate", "Apprentice (2-4)", "Fresh Adventurer"}
+GUILD_AMBASSADOR_ROLE_NAME = "Guild Ambassador"
+FRESH_ADVENTURER_ROLE_NAME = "Fresh Adventurer"
 
 
-@bot.command(
-    name="approve"
-)
-async def approve_cmd(
-    ctx: commands.Context,
-    member: Optional[
-        discord.Member
-    ] = None
-):
-    print(
-        (
-            f"!approve called by "
-            f"{ctx.author} "
-            f"with member={member}"
-        ),
-        flush=True
-    )
+@bot.command(name="approve")
+async def approve_cmd(ctx: commands.Context, member: Optional[discord.Member] = None):
+    print(f"!approve called by {ctx.author} with member={member}", flush=True)
 
     if ctx.guild is None:
-        await ctx.send(
-            "❌ This command can only be used in a server."
-        )
+        await ctx.send("❌ This command can only be used in a server.")
         return
-
     if member is None:
+        await ctx.send("❌ Usage: `!approve @player`")
+        return
+
+    if not ({role.name for role in ctx.author.roles} & ALLOWED_APPROVE_ROLES):
         await ctx.send(
-            "❌ Usage: `!approve @player`"
+            "❌ Only members with the Stewards, The Hearth, or DM role may use this command."
         )
         return
 
-    if not (
-        {
-            role.name
-            for role
-            in ctx.author.roles
-        }
-        & ALLOWED_APPROVE_ROLES
-    ):
-        await ctx.send(
-            (
-                "❌ Only members with the "
-                "Stewards, The Hearth, "
-                "or DM role may use this command."
-            )
-        )
-        return
-
-    guild = (
-        ctx.guild
-    )
-
+    guild = ctx.guild
     roles_to_remove = []
-
-    for name in (
-        APPROVE_REMOVE_ROLES
-    ):
-        role = discord.utils.get(
-            guild.roles,
-            name=name
-        )
-
-        if role is None:
-            await ctx.send(
-                (
-                    "❌ Could not find "
-                    f"the role: `{name}`"
-                )
-            )
-            return
-
-        roles_to_remove.append(
-            role
-        )
-
     roles_to_add = []
 
-    for name in (
-        APPROVE_ADD_ROLES
-    ):
-        role = discord.utils.get(
-            guild.roles,
-            name=name
-        )
-
+    for name in APPROVE_REMOVE_ROLES:
+        role = discord.utils.get(guild.roles, name=name)
         if role is None:
-            await ctx.send(
-                (
-                    "❌ Could not find "
-                    f"the role: `{name}`"
-                )
-            )
+            await ctx.send(f"❌ Could not find the role: `{name}`")
             return
+        roles_to_remove.append(role)
 
-        roles_to_add.append(
-            role
-        )
+    for name in APPROVE_ADD_ROLES:
+        role = discord.utils.get(guild.roles, name=name)
+        if role is None:
+            await ctx.send(f"❌ Could not find the role: `{name}`")
+            return
+        roles_to_add.append(role)
 
-    ambassador_role = discord.utils.get(
-        guild.roles,
-        name=(
-            GUILD_AMBASSADOR_ROLE_NAME
-        )
-    )
-
+    ambassador_role = discord.utils.get(guild.roles, name=GUILD_AMBASSADOR_ROLE_NAME)
     if ambassador_role is None:
-        await ctx.send(
-            (
-                "❌ Could not find the role: "
-                f"`{GUILD_AMBASSADOR_ROLE_NAME}`"
-            )
-        )
+        await ctx.send(f"❌ Could not find the role: `{GUILD_AMBASSADOR_ROLE_NAME}`")
         return
 
-    me = (
-        guild.me
-        or guild.get_member(
-            bot.user.id
-        )
-    )
-
+    me = guild.me or guild.get_member(bot.user.id)
     if me is None:
-        await ctx.send(
-            (
-                "❌ I couldn't verify "
-                "my server permissions."
-            )
-        )
+        await ctx.send("❌ I couldn't verify my server permissions.")
+        return
+    if not me.guild_permissions.manage_roles:
+        await ctx.send("❌ I need the **Manage Roles** permission to do that.")
         return
 
-    if not (
-        me.guild_permissions.manage_roles
-    ):
-        await ctx.send(
-            (
-                "❌ I need the **Manage Roles** "
-                "permission to do that."
-            )
-        )
-        return
-
-    for role in (
-        roles_to_remove
-        + roles_to_add
-    ):
+    for role in roles_to_remove + roles_to_add:
         if me.top_role <= role:
-            await ctx.send(
-                (
-                    "❌ My bot role must be higher "
-                    f"than `{role.name}` "
-                    "to manage it."
-                )
-            )
+            await ctx.send(f"❌ My bot role must be higher than `{role.name}` to manage it.")
             return
 
-    if (
-        me.top_role
-        <= member.top_role
-    ):
+    if me.top_role <= member.top_role:
         await ctx.send(
-            (
-                "❌ My bot role must be higher "
-                "than that member’s top role "
-                "to edit their roles."
-            )
+            "❌ My bot role must be higher than that member’s top role to edit their roles."
         )
         return
 
     try:
         if roles_to_remove:
-            await member.remove_roles(
-                *roles_to_remove,
-                reason=(
-                    f"Approved by "
-                    f"{ctx.author}"
-                )
-            )
-
+            await member.remove_roles(*roles_to_remove, reason=f"Approved by {ctx.author}")
         if roles_to_add:
-            await member.add_roles(
-                *roles_to_add,
-                reason=(
-                    f"Approved by "
-                    f"{ctx.author}"
-                )
-            )
-
+            await member.add_roles(*roles_to_add, reason=f"Approved by {ctx.author}")
     except discord.Forbidden:
-        await ctx.send(
-            (
-                "❌ Discord denied the role update. "
-                "Check role hierarchy "
-                "and permissions."
-            )
-        )
+        await ctx.send("❌ Discord denied the role update. Check role hierarchy and permissions.")
         return
-
     except discord.HTTPException as e:
-        await ctx.send(
-            (
-                "❌ Failed to update roles: "
-                f"{e}"
-            )
-        )
+        await ctx.send(f"❌ Failed to update roles: {e}")
         return
 
     embed = discord.Embed(
-        title=(
-            "Welcome to the Guild! ✅"
-        ),
+        title="Welcome to the Guild! ✅",
         description=(
             f"{member.mention} you're approved!\n\n"
-
             "First, check out "
             "https://discord.com/channels/1464479110666649790/1464503181873647616 "
             "to select your preferred roles.\n\n"
-
             "**Our Guild Rules:**\n"
             "https://discord.com/channels/1464479110666649790/1557762596004827166\n\n"
-
             "**Want to chat with your fellow Guild Members?**\n"
             "https://discord.com/channels/1464479110666649790/1464523819309076532\n\n"
-
             "**Rules for RP?**\n"
             "https://discord.com/channels/1464479110666649790/1469524380408217833\n\n"
-
             "**Want to join an RP?**\n"
             "https://discord.com/channels/1464479110666649790/1464489594627162348\n\n"
-
             "Any further questions, do not hesitate to ping "
-            f"{ambassador_role.mention} "
-            "in "
+            f"{ambassador_role.mention} in "
             "https://discord.com/channels/1464479110666649790/1480193099195089056 "
-            "for a guided tour of the server "
-            "and how things work! 😁"
+            "for a guided tour of the server and how things work! 😁"
         ),
-        color=theme_color()
+        color=theme_color(),
     )
 
-    await ctx.send(
-        embed=apply_theme(
-            embed
-        )
-    )
+    await ctx.send(embed=apply_theme(embed))
 
 
 # =========================
 # ERROR HANDLERS
 # =========================
 @bot.tree.error
-async def on_app_command_error(
-    interaction: discord.Interaction,
-    error: Exception
-):
-    shown = (
-        getattr(
-            error,
-            "original",
-            None
-        )
-        or error
-    )
-
-    print(
-        "Slash command error:",
-        repr(
-            shown
-        ),
-        flush=True
-    )
-
-    traceback.print_exception(
-        type(
-            shown
-        ),
-        shown,
-        shown.__traceback__
-    )
-
-    msg = (
-        f"❌ Error: "
-        f"`{type(shown).__name__}` — "
-        f"{shown}"
-    )
+async def on_app_command_error(interaction: discord.Interaction, error: Exception):
+    shown = getattr(error, "original", None) or error
+    print("Slash command error:", repr(shown), flush=True)
+    traceback.print_exception(type(shown), shown, shown.__traceback__)
+    msg = f"❌ Error: `{type(shown).__name__}` — {shown}"
 
     try:
         if interaction.response.is_done():
-
-            await interaction.followup.send(
-                msg[:1900],
-                ephemeral=True
-            )
-
+            await interaction.followup.send(msg[:1900], ephemeral=True)
         else:
-            await interaction.response.send_message(
-                msg[:1900],
-                ephemeral=True
-            )
-
+            await interaction.response.send_message(msg[:1900], ephemeral=True)
     except Exception:
         pass
 
 
 @bot.event
-async def on_command_error(
-    ctx: commands.Context,
-    error: Exception
-):
-    if isinstance(
-        error,
-        commands.MemberNotFound
-    ):
-        await ctx.send(
-            (
-                "❌ I couldn't find that member. "
-                "Try `!approve @player`."
-            )
-        )
+async def on_command_error(ctx: commands.Context, error: Exception):
+    if isinstance(error, commands.MemberNotFound):
+        await ctx.send("❌ I couldn't find that member. Try `!approve @player`.")
         return
 
-    if isinstance(
-        error,
-        commands.MissingRequiredArgument
-    ):
-        command_name = (
-            ctx.command.qualified_name
-            if ctx.command
-            else ""
-        )
+    if isinstance(error, commands.MissingRequiredArgument):
+        command_name = ctx.command.qualified_name if ctx.command else ""
 
         if command_name == "approve":
-            await ctx.send(
-                "❌ Usage: `!approve @player`"
-            )
-
+            await ctx.send("❌ Usage: `!approve @player`")
         elif command_name == "qrecords":
             await ctx.send(
-                (
-                    '❌ Usage: !qrecords '
-                    '"Name" "Desc" "Difficulty" '
-                    '"xp-min/xp-max" '
-                    '"gp-min/gp-max" '
-                    '"loot/none" '
-                    '@p char level ...'
-                )
+                '❌ Usage: !qrecords "Name" "Desc" "Difficulty" "xp-min/xp-max" '
+                '"gp-min/gp-max" "loot/none" @p char level ...'
             )
-
         else:
-            await ctx.send(
-                (
-                    "❌ That command is missing "
-                    "a required argument."
-                )
-            )
-
+            await ctx.send("❌ That command is missing a required argument.")
         return
 
-    if isinstance(
-        error,
-        commands.CommandNotFound
-    ):
+    if isinstance(error, commands.CommandNotFound):
         return
 
-    print(
-        "Prefix command error:",
-        repr(
-            error
-        ),
-        flush=True
-    )
-
-    traceback.print_exception(
-        type(
-            error
-        ),
-        error,
-        error.__traceback__
-    )
-
-    await ctx.send(
-        (
-            "❌ Command error: "
-            f"`{type(error).__name__}` — "
-            f"{error}"
-        )
-    )
+    print("Prefix command error:", repr(error), flush=True)
+    traceback.print_exception(type(error), error, error.__traceback__)
+    await ctx.send(f"❌ Command error: `{type(error).__name__}` — {error}")
 
 
 # =========================
@@ -7415,78 +2632,26 @@ async def on_command_error(
 async def on_ready():
     with db() as conn:
         with conn.cursor() as cur:
-
-            cur.execute("""
-                SELECT message_id
-                FROM sessions
-            """)
-
-            msg_ids = [
-                int(
-                    r[0]
-                )
-                for r
-                in cur.fetchall()
-            ]
+            cur.execute("SELECT message_id FROM sessions")
+            msg_ids = [int(r[0]) for r in cur.fetchall()]
 
     for mid in msg_ids:
-        bot.add_view(
-            RPView(
-                mid
-            )
-        )
+        bot.add_view(RPView(mid))
 
     try:
         await bot.tree.sync()
-
-        print(
-            "Slash commands synced.",
-            flush=True
-        )
-
+        print("Slash commands synced.", flush=True)
     except Exception as e:
-        print(
-            "Command sync failed:",
-            repr(
-                e
-            ),
-            flush=True
-        )
-
+        print("Command sync failed:", repr(e), flush=True)
         traceback.print_exc()
 
-    print(
-        "Prefix commands registered:",
-        sorted(
-            command.name
-            for command
-            in bot.commands
-        ),
-        flush=True
-    )
-
-    print(
-        (
-            f"Logged in as {bot.user} "
-            f"(guilds={len(bot.guilds)})"
-        ),
-        flush=True
-    )
+    print(f"Logged in as {bot.user} (guilds={len(bot.guilds)})", flush=True)
 
 
 async def main():
     await start_web_server()
-
-    asyncio.create_task(
-        ticker_loop()
-    )
-
-    await bot.start(
-        TOKEN
-    )
+    asyncio.create_task(ticker_loop())
+    await bot.start(TOKEN)
 
 
-if __name__ == "__main__":
-    asyncio.run(
-        main()
-    )
+if __name__ == "
