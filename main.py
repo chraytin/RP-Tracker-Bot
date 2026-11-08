@@ -440,6 +440,106 @@ def random_loot(
 
 
 # =========================
+# ELIXIR HALL POTION CATALOG
+# Kept entirely separate from the regular loot registry.
+# CSV columns: Name, Rarity, Shop Price
+# =========================
+POTION_RARITIES = (
+    "Common",
+    "Uncommon",
+    "Rare",
+    "Very Rare",
+    "Legendary",
+)
+
+POTION_STOCK_COUNTS = {
+    "Common": 5,
+    "Uncommon": 4,
+    "Rare": 3,
+    "Very Rare": 2,
+    "Legendary": 1,
+}
+
+POTION_CSV_FILENAME = "Guild Potion List.csv"
+
+
+def load_potion_catalog(path: str) -> Dict[str, List[Tuple[str, str]]]:
+    catalog: Dict[str, List[Tuple[str, str]]] = {
+        rarity: [] for rarity in POTION_RARITIES
+    }
+
+    if not os.path.exists(path):
+        print(
+            f"Elixir Hall catalog not found: {path}; no potions loaded.",
+            flush=True,
+        )
+        return catalog
+
+    rarity_lookup = {
+        "".join(ch for ch in rarity.lower() if ch.isalnum()): rarity
+        for rarity in POTION_RARITIES
+    }
+    seen = {rarity: set() for rarity in POTION_RARITIES}
+
+    with open(path, "r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+
+        for line_number, row in enumerate(reader, start=2):
+            normalized = {
+                _normalize_header(key): str(value or "").strip()
+                for key, value in row.items()
+                if key is not None
+            }
+            name = (
+                normalized.get("name")
+                or normalized.get("itemname")
+                or normalized.get("potion")
+                or ""
+            )
+            rarity_raw = normalized.get("rarity", "")
+            price = (
+                normalized.get("shopprice")
+                or normalized.get("shopvalue")
+                or normalized.get("price")
+                or ""
+            )
+            rarity_key = "".join(
+                ch for ch in rarity_raw.lower() if ch.isalnum()
+            )
+            rarity = rarity_lookup.get(rarity_key)
+
+            if not name and not rarity_raw and not price:
+                continue
+
+            if not name or not rarity or not price:
+                print(
+                    f"Skipping incomplete/invalid potion on CSV line {line_number}.",
+                    flush=True,
+                )
+                continue
+
+            # Ignore repeated copies of the same potion within a rarity.
+            key = " ".join(name.casefold().split())
+            if key in seen[rarity]:
+                continue
+            seen[rarity].add(key)
+            catalog[rarity].append((name, price))
+
+    return catalog
+
+
+POTION_TABLE = load_potion_catalog(
+    _repo_path(POTION_CSV_FILENAME)
+)
+
+print(
+    "Elixir Hall potions loaded:",
+    {rarity: len(POTION_TABLE[rarity]) for rarity in POTION_RARITIES},
+    flush=True,
+)
+
+
+# =========================
 # DATABASE + SCHEMA
 # =========================
 def ensure_schema():
@@ -6244,6 +6344,125 @@ async def arcaneexchange_cmd(
 
     await ctx.send(
         final_output
+    )
+
+
+# =========================
+# ELIXIR HALL: !elixirhall
+# Separate random potion menu; does not affect general loot.
+# =========================
+@bot.command(
+    name="elixirhall"
+)
+async def elixirhall_cmd(
+    ctx: commands.Context
+):
+    if ctx.guild is None:
+        await ctx.send(
+            "❌ This command can only be used in a server."
+        )
+        return
+
+    author_roles = {
+        role.name
+        for role in ctx.author.roles
+    }
+
+    # Match the existing Arcane Exchange's staff permission.
+    if not (author_roles & PAYDAY_ALLOWED_ROLES):
+        await ctx.send(
+            "❌ Only The Hearth may stock the Elixir Hall."
+        )
+        return
+
+    sections = []
+    for rarity in POTION_RARITIES:
+        pool = POTION_TABLE.get(rarity, [])
+        desired = POTION_STOCK_COUNTS[rarity]
+        count = min(desired, len(pool))
+
+        if count == 0:
+            sections.append(
+                f"**__{rarity}__**\n(No potions loaded)"
+            )
+            continue
+
+        # Unique picks within each rarity, freshly rolled per command.
+        items = random.sample(pool, count)
+        item_width = max(len("Potion"), *(len(name) for name, _ in items))
+        price_width = max(len("Shop Price"), *(len(price) for _, price in items))
+
+        section_lines = [
+            f"**__{rarity}__**",
+            "```",
+            f"{'Potion':<{item_width}}  {'Shop Price':>{price_width}}",
+            f"{'-' * item_width}  {'-' * price_width}",
+        ]
+        for name, price in items:
+            section_lines.append(
+                f"{name:<{item_width}}  {price:>{price_width}}"
+            )
+        section_lines.append("```")
+
+        if count < desired:
+            section_lines.append(
+                f"*Only {count}/{desired} potions available in this rarity.*"
+            )
+
+        sections.append("\n".join(section_lines))
+
+    # Do not fail if the complete menu exceeds Discord's 2,000 chars.
+    header = "🧪 **The Elixir Hall — Today's Potion Stock**"
+    continuation = "🧪 **The Elixir Hall — Continued**"
+    message = header
+
+    for section in sections:
+        addition = "\n\n" + section
+        if len(message) + len(addition) > 1900:
+            await ctx.send(message)
+            message = continuation + addition
+        else:
+            message += addition
+
+    if message:
+        await ctx.send(message)
+
+
+# =========================
+# RELOAD POTIONS: !reloadpotions
+# =========================
+@bot.command(
+    name="reloadpotions"
+)
+async def reloadpotions_cmd(
+    ctx: commands.Context
+):
+    if ctx.guild is None:
+        await ctx.send(
+            "❌ This command can only be used in a server."
+        )
+        return
+
+    author_roles = {
+        role.name
+        for role in ctx.author.roles
+    }
+    if not (author_roles & PAYDAY_ALLOWED_ROLES):
+        await ctx.send(
+            "❌ Only The Hearth may reload the potion catalog."
+        )
+        return
+
+    global POTION_TABLE
+    POTION_TABLE = load_potion_catalog(
+        _repo_path(POTION_CSV_FILENAME)
+    )
+    counts = ", ".join(
+        f"{rarity}: {len(POTION_TABLE[rarity])}"
+        for rarity in POTION_RARITIES
+    )
+    await ctx.send(
+        f"✅ Elixir Hall potion catalog reloaded.\n{counts}"
     )
 
 
