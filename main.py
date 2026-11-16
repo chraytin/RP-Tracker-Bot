@@ -4787,6 +4787,7 @@ PAYDAY_STAFF_ROLES = {
     "Guild Ambassador": 5,
     "Stewards": 5,
     "The Hearth": 5,
+    "Lorekeeper": 5,
 }
 
 
