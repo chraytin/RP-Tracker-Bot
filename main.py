@@ -1007,7 +1007,14 @@ bot = commands.Bot(
     command_prefix="!",
     intents=intents,
 )
+from grandmaster_marketplace import setup_marketplace
 
+setup_marketplace(
+    bot,
+    db,
+    apply_theme,
+    RARITY_ORDER,
+)
 
 # =========================
 # KEEPALIVE WEB SERVER
